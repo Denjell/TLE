@@ -158,7 +158,7 @@ class Codeforces(commands.Cog):
         title = f'{problem.index}. {problem.name}'
         desc = cf_common.cache2.contest_cache.get_contest(problem.contestId).name
         embed = discord.Embed(title=title, url=problem.url, description=desc)
-        ratingStr = problem.rating if srating == erating else '||'+problem.rating+'||'
+        ratingStr = problem.rating if srating == erating else '||'+str(problem.rating)+'||'
         embed.add_field(name='Rating', value=ratingStr)
         if tags:
             tagslist = ', '.join(problem.get_matched_tags(tags))
