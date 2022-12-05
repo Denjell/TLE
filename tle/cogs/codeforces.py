@@ -69,7 +69,7 @@ class Codeforces(commands.Cog):
     @commands.command(brief='Upsolve a problem')
     @cf_common.user_guard(group='gitgud')
     async def upsolve(self, ctx, choice: int = -1):
-        """Upsolve: The command ;upsolve lists all problems that you haven't solved in contests you participated and which are within the range -300 to +700 of your current rating
+        """Upsolve: The command ;upsolve lists all problems that you haven't solved in contests you participated 
         - Type ;upsolve for listing all available problems.
         - Type ;upsolve <nr> for choosing the problem <nr> as gitgud problem (only possible if you have no active gitgud challenge)
         - After solving the problem you can claim gitgud points for it with ;gotgud
@@ -105,7 +105,7 @@ class Codeforces(commands.Cog):
             problem = problems[choice - 1]
             await self._gitgud(ctx, handle, problem, problem.rating - rating)
         else:
-            problems = problems[:100]
+            problems = problems[:500]
               
             def make_line(i, prob):
                 data = (f'{i + 1}: [{prob.name}]({prob.url}) [{prob.rating}]')
