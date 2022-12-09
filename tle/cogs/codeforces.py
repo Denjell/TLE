@@ -306,7 +306,7 @@ class Codeforces(commands.Cog):
                 if arg[0:].isdigit():
                     delta = int(arg)
             if arg.startswith('r='):
-                if arg[2:].isdigit() or (arg[2] == '-' and arg[3:].isdigit):
+                if arg[2:].isdigit():
                     delta = int(arg[2:]) - rating
 
 
