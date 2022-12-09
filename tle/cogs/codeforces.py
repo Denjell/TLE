@@ -305,6 +305,10 @@ class Codeforces(commands.Cog):
             else:
                 if arg[0:].isdigit():
                     delta = int(arg)
+            if arg.starts_with('r='):
+                if arg[2:].isdigit() or (arg[2] == '-' and arg[3:].isdigit):
+                    delta = int(arg[2:]) - rating
+
 
         await self._validate_gitgud_status(ctx, delta)
         
