@@ -65,7 +65,7 @@ async def main():
     intents.message_content = True
 
     bot = commands.Bot(command_prefix=commands.when_mentioned_or(';'), intents=intents)
-    bot.help_command = TleHelp()
+    bot.help_command = discord_common.TleHelp()
     cogs = [file.stem for file in Path('tle', 'cogs').glob('*.py')]
     for extension in cogs:
         await bot.load_extension(f'tle.cogs.{extension}')
