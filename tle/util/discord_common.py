@@ -138,5 +138,5 @@ async def presence(bot):
 
     presence_task.start()
 
-class TleHelp(commands.MinimalHelpCommand):
+class TleHelp(commands.DefaultHelpCommand):
     pass
