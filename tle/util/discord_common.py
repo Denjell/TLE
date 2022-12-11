@@ -137,3 +137,6 @@ async def presence(bot):
             await asyncio.sleep(10 * 60)
 
     presence_task.start()
+
+class TleHelp(commands.MinimalHelpCommand):
+    pass
