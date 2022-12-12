@@ -163,3 +163,4 @@ class TleHelp(commands.DefaultHelpCommand):
                 for line in command.help.splitlines():
                     self.paginator.add_line(line)
                 self.paginator.add_line()
+
