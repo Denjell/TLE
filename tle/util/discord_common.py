@@ -139,4 +139,26 @@ async def presence(bot):
     presence_task.start()
 
 class TleHelp(commands.DefaultHelpCommand):
-    pass
+    def add_command_formatting(self, command):
+        """A utility function to format the non-indented block of commands and groups.
+
+        Parameters
+        ------------
+        command: :class:`Command`
+            The command to format.
+        """
+
+        if command.description:
+            self.paginator.add_line(command.description, empty=True)
+
+        signature = self.get_command_signature(command)
+        usage = command.usage
+        self.paginator.add_line(signature + usage, empty=True)
+
+        if command.help:
+            try:
+                self.paginator.add_line(command.help, empty=True)
+            except RuntimeError:
+                for line in command.help.splitlines():
+                    self.paginator.add_line(line)
+                self.paginator.add_line()
