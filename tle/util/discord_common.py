@@ -152,8 +152,9 @@ class TleHelp(commands.DefaultHelpCommand):
             self.paginator.add_line(command.description, empty=True)
 
         signature = self.get_command_signature(command)
-        usage = command.usage
-        self.paginator.add_line(signature + usage, empty=True)
+        if command.usage:
+            signature += " "+command.usage
+        self.paginator.add_line(signature, empty=True)
 
         if command.help:
             try:
