@@ -593,7 +593,7 @@ class Dueling(commands.Cog):
     @duel.command(brief='Show duelist profile page')
     async def profile(self, ctx, member: discord.Member = None):
         member = member or ctx.author
-        ### we can add auto selfregister here too but we need to make sure that member has linked handle!
+        
         if not cf_common.user_db.is_duelist(member.id, ctx.guild.id):
             raise DuelCogError(
                 f'{member.mention} has not done any duels.')
@@ -825,6 +825,7 @@ class Dueling(commands.Cog):
 
     # TODO: Add _invalidate by cfhandle
      
+    # rating does not plot rating changes through lockouts
     @duel.command(brief='Plot rating', usage='[duelist]')
     async def rating(self, ctx, *members: discord.Member):
         """Plot duelist's rating."""
