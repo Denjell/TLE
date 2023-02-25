@@ -442,11 +442,13 @@ class Contests(commands.Cog):
         return embed
 
     @commands.command(brief='Show ranklist for given handles and/or server members')
-    async def ranklist(self, ctx, contest_id: int, *handles: str):
+    async def ranklist(self, ctx, contest_id: int, *args: str):
         """Shows ranklist for the contest with given contest id. If handles contains
         '+server', all server members are included. No handles defaults to '+server'.
         """
-        handles = await cf_common.resolve_handles(ctx, self.member_converter, handles, maxcnt=None, default_to_all_server=True)
+        (show_official,), handles = cf_common.filter_flags(args, ['+official'])
+        handles = await cf_common.resolve_handles(ctx, self.member_converter, handles, maxcnt=None,
+                                                  default_to_all_server=True)
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
         wait_msg = await ctx.channel.send('Generating ranklist, please wait...')
         ranklist = None
@@ -455,8 +457,8 @@ class Contests(commands.Cog):
         except cache_system2.RanklistNotMonitored:
             if contest.phase == 'BEFORE':
                 raise ContestCogError(f'Contest `{contest.id} | {contest.name}` has not started')
-            ranklist = await cf_common.cache2.ranklist_cache.generate_ranklist(contest.id,
-                                                                            fetch_changes=True)
+            ranklist = await cf_common.cache2.ranklist_cache.generate_ranklist(contest.id, fetch_changes=True,
+                                                                               show_unofficial=show_official is False)
         await wait_msg.delete()
         await ctx.channel.send(embed=self._make_contest_embed_for_ranklist(ranklist))
         await self._show_ranklist(channel=ctx.channel, contest_id=contest_id, handles=handles, ranklist=ranklist)
