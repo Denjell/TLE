@@ -451,15 +451,20 @@ class Contests(commands.Cog):
                 rated_contestants.append(handle)
 
         # fix the actual ranks for cases like Edu rounds where unofficial ranks are also included in official standings
-        current_rank = 1
+        current_rank = 0
+        last_rank = 0
+        last_score = (-1, -1)
         for contestant in ranklist.standings:
             handle = contestant.party.teamName or contestant.party.members[0].handle
             try:
                 fk = ranklist.delta_by_handle[handle]
-                dict = ranklist.standing_by_id[handle]._asdict()
-                dict['rank'] = current_rank
-                ranklist.standing_by_id[handle] = cf.make_from_dict(cf.RanklistRow, dict)
+                current_score = (contestant.points, contestant.penalty)
                 current_rank += 1
+                dict = ranklist.standing_by_id[handle]._asdict()
+                dict['rank'] = current_rank if current_score != last_score else last_rank
+                last_rank = dict['rank']
+                last_score = current_score
+                ranklist.standing_by_id[handle] = cf.make_from_dict(cf.RanklistRow, dict)
             except KeyError:
                 pass
 
@@ -505,9 +510,11 @@ class Contests(commands.Cog):
             except rl.HandleNotPresentError:
                 continue
 
-            # Database has correct handle ignoring case, update to it
             # TODO: It will throw an exception if this row corresponds to a team. At present ranklist doesnt show teams.
             # It should be fixed in https://github.com/cheran-senthil/TLE/issues/72
+            # This probably is fixed, tho idk if that is what they meant when they made this
+
+            # Database has correct handle ignoring case, update to it
             handle = standing.party.teamName or standing.party.members[0].handle
             if vc and standing.party.participantType != 'VIRTUAL':
                 continue
