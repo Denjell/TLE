@@ -583,7 +583,7 @@ class RanklistCache:
         for contest_id, ranklist in ranklist_by_contest.items():
             self.ranklist_by_contest[contest_id] = ranklist
 
-    async def generate_ranklist(self, contest_id, *, fetch_changes=False, predict_changes=False, show_unofficial=True):
+    async def generate_ranklist(self, contest_id, *, fetch_changes=False, predict_changes=False, show_unofficial):
         assert fetch_changes ^ predict_changes
 
         contest, problems, standings = await cf.contest.standings(contest_id=contest_id,
