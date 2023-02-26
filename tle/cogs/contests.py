@@ -445,10 +445,7 @@ class Contests(commands.Cog):
     def _filter_rated_only_contestant_data(handles, ranklist):
 
         # Keep only rated contestants
-        rated_contestants = []
-        for handle in handles:
-            if ranklist.get_delta(handle) is not None:
-                rated_contestants.append(handle)
+        rated_contestants = [handle for handle in handles if handle in ranklist.delta_by_handle]
 
         # fix the actual ranks for cases like Edu rounds where unofficial ranks are also included in official standings
         current_rank = 0
@@ -456,8 +453,7 @@ class Contests(commands.Cog):
         last_score = (-1, -1)
         for contestant in ranklist.standings:
             handle = contestant.party.teamName or contestant.party.members[0].handle
-            try:
-                fk = ranklist.delta_by_handle[handle]
+            if handle in ranklist.delta_by_handle:
                 current_score = (contestant.points, contestant.penalty)
                 current_rank += 1
                 dict = ranklist.standing_by_id[handle]._asdict()
@@ -465,15 +461,15 @@ class Contests(commands.Cog):
                 last_rank = dict['rank']
                 last_score = current_score
                 ranklist.standing_by_id[handle] = cf.make_from_dict(cf.RanklistRow, dict)
-            except KeyError:
-                pass
 
         return rated_contestants, ranklist
 
     @commands.command(brief='Show ranklist for given handles and/or server members')
     async def ranklist(self, ctx, contest_id: int, *args: str):
-        """Shows ranklist for the contest with given contest id. If handles contains
+        """
+        Shows ranklist for the contest with given contest id. If handles contains
         '+server', all server members are included. No handles defaults to '+server'.
+        Use '+official' for only showing rated participants for the round
         """
         (show_official,), handles = cf_common.filter_flags(args, ['+official'])
         handles = await cf_common.resolve_handles(ctx, self.member_converter, handles, maxcnt=None,
@@ -490,7 +486,8 @@ class Contests(commands.Cog):
                                                                                show_unofficial=show_official is False)
 
         # for Edu rounds the cf api returns the unofficial participants as official as well.
-        # Hence we need to filter in actual rated contestants
+        # Hence we need to fix ranks for actual rated people
+        # Note that unofficial people still have their original ranks but they will be filtered out in show_ranklist
         if show_official:
             handles, ranklist = self._filter_rated_only_contestant_data(handles, ranklist)
 
