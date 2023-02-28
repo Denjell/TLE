@@ -445,7 +445,8 @@ class Contests(commands.Cog):
     def _filter_rated_only_contestant_data(handles, ranklist):
 
         # Keep only rated contestants
-        rated_contestants = [handle for handle in handles if handle in ranklist.delta_by_handle]
+        rated_contestants = [handle for handle in handles
+                             if ranklist.standing_by_id.get_correct_handle(handle) in ranklist.delta_by_handle]
 
         # fix the actual ranks for cases like Edu rounds where unofficial ranks are also included in official standings
         current_rank = 0
@@ -488,7 +489,7 @@ class Contests(commands.Cog):
         # for Edu rounds the cf api returns the unofficial participants as official as well.
         # Hence we need to fix ranks for actual rated people
         # Note that unofficial people still have their original ranks but they will be filtered out in show_ranklist
-        if show_official:
+        if show_official and "educational" in contest.name.lower():
             handles, ranklist = self._filter_rated_only_contestant_data(handles, ranklist)
 
         await wait_msg.delete()
