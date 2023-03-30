@@ -23,7 +23,7 @@ _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
 _GITGUD_SCORE_DISTRIB_MIN = -400
 _GITGUD_SCORE_DISTRIB_MAX =  300
 _ONE_WEEK_DURATION = 40 * 24 * 60 * 60
-_GITGUD_MORE_POINTS_START_TIME = 1680300000
+_GITGUD_MORE_POINTS_START_TIME = 1680300000 - _ONE_WEEK_DURATION
 
 def _calculateGitgudScoreForDelta(delta):
     if (delta <= _GITGUD_SCORE_DISTRIB_MIN):
@@ -453,7 +453,7 @@ class Codeforces(commands.Cog):
 
         if rc == 1:
             duration = cf_common.pretty_time_format(finish_time - issue_time)
-            await ctx.send(f'Challenge completed in {duration}. {handle} gained {score} all-time points and {monthlyPoints} monthly points.')
+            await ctx.send(f'Challenge completed in {duration}. {handle} gained {score} alltime ranklist points and {monthlyPoints} monthly ranklist points.')
         else:
             await ctx.send('You have already claimed your points')
 
