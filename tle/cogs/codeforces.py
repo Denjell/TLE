@@ -22,7 +22,7 @@ _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
 _GITGUD_SCORE_DISTRIB_MIN = -400
 _GITGUD_SCORE_DISTRIB_MAX =  300
-_ONE_WEEK_DURATION = 7 * 24 * 60 * 60
+_ONE_WEEK_DURATION = 40 * 24 * 60 * 60
 _GITGUD_MORE_POINTS_START_TIME = 1680300000
 
 def _calculateGitgudScoreForDelta(delta):
@@ -84,7 +84,7 @@ class Codeforces(commands.Cog):
         desc = cf_common.cache2.contest_cache.get_contest(problem.contestId).name
         embed = discord.Embed(title=title, url=problem.url, description=desc)
         embed.add_field(name='Rating', value=problem.rating)
-        embed.add_field(name='Alltime Points', value=(points))
+        embed.add_field(name='Alltime points', value=(points))
         embed.add_field(name='Monthly points', value=(monthlypoints))
         await ctx.send(f'Challenge problem for `{handle}`', embed=embed)
 
