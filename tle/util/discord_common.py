@@ -152,9 +152,7 @@ class TleHelp(commands.DefaultHelpCommand):
             self.paginator.add_line(command.description, empty=True)
 
         signature = ";"
-        if command.parent:
-            signature += command.parent.full_parent_name + " "
-        signature += command.signature
+        signature += command.qualified_name
         #signature = ""
         #if command.parent:
         #    signature += command.parent.signature
