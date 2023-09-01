@@ -331,14 +331,30 @@ class ProblemsetCache:
 
     async def _fetch_for_contest(self, contest_id):
         try:
-            _, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
+            contest, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
                                                           count=1)
+            contest_name: str = contest.name
+            contest_name = contest_name.lower()
+            divisions = []
+            for i in range (1, 5):
+                if f'div. {i}' in contest_name:
+                    divisions.append(f'div{i}')
+                    divisions.append(f'd{i}')
+            
+            for problem in problemset:
+                for division in divisions:
+                    problem.tags.append(division)
+
         except cf.CodeforcesApiError as er:
             self.logger.warning(f'Problemset fetch failed for contest {contest_id}. {er!r}')
             problemset = []
+        
         return problemset
 
     def _save_problems(self, problems):
+        print("ENTERING")
+        print(problems)
+        print("END")
         rc = self.cache_master.conn.cache_problemset(problems)
         self.logger.info(f'Saved {rc} problems to database.')
 
