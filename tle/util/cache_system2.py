@@ -239,6 +239,14 @@ class ProblemCache:
         self.problem_by_name = problem_by_name
         self.problems_last_cache = time.time()
 
+        for problem in self.problems:
+            problem_contest: cf.Contest = self.cache_master.contest_cache.contest_by_id.get(problem.contestId)
+            contest_name = problem_contest.name.lower()
+
+            for i in range(1, 5):
+                if f'div. {i}' in contest_name:
+                    problem.tags.append(f'div{i}')
+        
         rc = self.cache_master.conn.cache_problems(self.problems)
         self.logger.info(f'{rc} problems stored in database')
 
@@ -352,9 +360,6 @@ class ProblemsetCache:
         return problemset
 
     def _save_problems(self, problems):
-        print("ENTERING")
-        print(problems)
-        print("END")
         rc = self.cache_master.conn.cache_problemset(problems)
         self.logger.info(f'Saved {rc} problems to database.')
 
