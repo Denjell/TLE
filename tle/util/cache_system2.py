@@ -342,7 +342,7 @@ class ProblemsetCache:
                                                           count=1)
             divisions = []
             for i in range (1, 5):
-                if contest.matches(f'div.{i}'):
+                if contest.matches([f'div.{i}']):
                     divisions.append(f'div{i}')
             
             for problem in problemset:
