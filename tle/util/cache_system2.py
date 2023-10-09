@@ -244,7 +244,7 @@ class ProblemCache:
         for problem in self.problems:
             problem_contest = self.cache_master.contest_cache.contest_by_id.get(problem.contestId)
 
-            divisions = [div_tag for div_tag in self._DIV_TAGS if problem_contest.matches(div_tag)] 
+            divisions = [div_tag for div_tag in _DIV_TAGS if problem_contest.matches(div_tag)] 
             problem.tags.append(divisions) 
         
         rc = self.cache_master.conn.cache_problems(self.problems)
@@ -342,7 +342,7 @@ class ProblemsetCache:
             contest, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
                                                           count=1)
             
-            divisions = [div_tag for div_tag in self._DIV_TAGS if contest.matches(div_tag)] 
+            divisions = [div_tag for div_tag in _DIV_TAGS if contest.matches(div_tag)] 
 
             for problem in problemset:
                 problem.tags += divisions
