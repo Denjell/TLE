@@ -245,7 +245,8 @@ class ProblemCache:
             problem_contest = self.cache_master.contest_cache.contest_by_id.get(problem.contestId)
 
             divisions = [div_tag for div_tag in _DIV_TAGS if problem_contest.matches(div_tag)] 
-            problem.tags.append(divisions) 
+            for division in divisions:
+                problem.tags.append(division) 
         
         rc = self.cache_master.conn.cache_problems(self.problems)
         self.logger.info(f'{rc} problems stored in database')
@@ -345,7 +346,9 @@ class ProblemsetCache:
             divisions = [div_tag for div_tag in _DIV_TAGS if contest.matches(div_tag)] 
 
             for problem in problemset:
-                problem.tags += divisions
+                for division in divisions:
+                    problem.tags.append(division) 
+
 
         except cf.CodeforcesApiError as er:
             self.logger.warning(f'Problemset fetch failed for contest {contest_id}. {er!r}')
