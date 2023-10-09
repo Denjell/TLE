@@ -16,7 +16,7 @@ from tle.util.ranklist import Ranklist
 logger = logging.getLogger(__name__)
 _CONTESTS_PER_BATCH_IN_CACHE_UPDATES = 100
 CONTEST_BLACKLIST = {1308, 1309, 1431, 1432}
-_DIV_TAGS = ['div1', 'div2', 'div3', 'div4']
+_DIV_TAGS = ['div1', 'div2', 'div3', 'div4', 'edu']
 
 def _is_blacklisted(contest):
     return contest.id in CONTEST_BLACKLIST
