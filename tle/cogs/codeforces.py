@@ -4,6 +4,7 @@ from typing import List
 import math
 import time
 from collections import defaultdict
+import logging
 
 import discord
 from discord.ext import commands
@@ -489,6 +490,8 @@ class Codeforces(commands.Cog):
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def _nogud(self, ctx, member: discord.Member):
         active = cf_common.user_db.check_challenge(member.id)
+        if not active:
+            await ctx.send(f'No active challenge found for user {member.display_name}.')
         rc = cf_common.user_db.skip_challenge(member.id, active[0], Gitgud.FORCED_NOGUD)
         if rc == 1:
             await ctx.send(f'Challenge skip forced.')
