@@ -239,6 +239,13 @@ class ProblemCache:
         self.problem_by_name = problem_by_name
         self.problems_last_cache = time.time()
 
+        for problem in self.problems:
+            problem_contest: cf.Contest = self.cache_master.contest_cache.contest_by_id.get(problem.contestId)
+
+            for i in range(1, 5):
+                if problem_contest.matches([f"div.{i}"]):
+                    problem.tags.append(f'div{i}')
+        
         rc = self.cache_master.conn.cache_problems(self.problems)
         self.logger.info(f'{rc} problems stored in database')
 
@@ -331,11 +338,21 @@ class ProblemsetCache:
 
     async def _fetch_for_contest(self, contest_id):
         try:
-            _, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
+            contest, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
                                                           count=1)
+            divisions = []
+            for i in range (1, 5):
+                if contest.matches([f'div.{i}']):
+                    divisions.append(f'div{i}')
+            
+            for problem in problemset:
+                for division in divisions:
+                    problem.tags.append(division)
+
         except cf.CodeforcesApiError as er:
             self.logger.warning(f'Problemset fetch failed for contest {contest_id}. {er!r}')
             problemset = []
+        
         return problemset
 
     def _save_problems(self, problems):
