@@ -41,6 +41,7 @@ class Codeforces(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.converter = commands.MemberConverter()
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     # more points seasons start at April 1st 2023 (timestamp: 1680300000) and is only active in the last 7 days of the month
 
