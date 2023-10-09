@@ -356,8 +356,12 @@ class Codeforces(commands.Cog):
             problem.contestId).startTimeSeconds)
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
+        self.logger.info(f'Before: {tags} and {bantags}')
+
         tags = [tag for tag in tags if tags not in cache_system2._DIV_TAGS]
         bantags = [tag for tag in tags if bantags not in cache_system2._DIV_TAGS]
+
+        self.logger.info(f'After: {tags} and {bantags}')
         if tags or bantags:
             delta = delta - 200
         await self._gitgud(ctx, handle, problems[choice], delta)
