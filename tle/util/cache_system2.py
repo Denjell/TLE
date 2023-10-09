@@ -16,7 +16,7 @@ from tle.util.ranklist import Ranklist
 logger = logging.getLogger(__name__)
 _CONTESTS_PER_BATCH_IN_CACHE_UPDATES = 100
 CONTEST_BLACKLIST = {1308, 1309, 1431, 1432}
-
+_DIV_TAGS = ['div1', 'div2', 'div3', 'div4']
 
 def _is_blacklisted(contest):
     return contest.id in CONTEST_BLACKLIST
@@ -164,6 +164,8 @@ class ContestCache:
 class ProblemCache:
     _RELOAD_INTERVAL = 6 * 60 * 60
 
+    
+
     def __init__(self, cache_master):
         self.cache_master = cache_master
 
@@ -240,11 +242,10 @@ class ProblemCache:
         self.problems_last_cache = time.time()
 
         for problem in self.problems:
-            problem_contest: cf.Contest = self.cache_master.contest_cache.contest_by_id.get(problem.contestId)
+            problem_contest = self.cache_master.contest_cache.contest_by_id.get(problem.contestId)
 
-            for i in range(1, 5):
-                if problem_contest.matches([f"div.{i}"]):
-                    problem.tags.append(f'div{i}')
+            divisions = [div_tag for div_tag in self._DIV_TAGS if problem_contest.matches(div_tag)] 
+            problem.tags.append(divisions) 
         
         rc = self.cache_master.conn.cache_problems(self.problems)
         self.logger.info(f'{rc} problems stored in database')
@@ -340,14 +341,11 @@ class ProblemsetCache:
         try:
             contest, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
                                                           count=1)
-            divisions = []
-            for i in range (1, 5):
-                if contest.matches([f'div.{i}']):
-                    divisions.append(f'div{i}')
             
+            divisions = [div_tag for div_tag in self._DIV_TAGS if contest.matches(div_tag)] 
+
             for problem in problemset:
-                for division in divisions:
-                    problem.tags.append(division)
+                problem.tags += divisions
 
         except cf.CodeforcesApiError as er:
             self.logger.warning(f'Problemset fetch failed for contest {contest_id}. {er!r}')
