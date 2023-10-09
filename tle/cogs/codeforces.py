@@ -360,8 +360,8 @@ class Codeforces(commands.Cog):
         choice = max(random.randrange(len(problems)) for _ in range(5))
         self.logger.info(f'Before: {tags} and {bantags}')
 
-        tags = [tag for tag in tags if tags not in cache_system2._DIV_TAGS]
-        bantags = [tag for tag in tags if bantags not in cache_system2._DIV_TAGS]
+        tags = [tag for tag in tags if tag not in cache_system2._DIV_TAGS]
+        bantags = [tag for tag in bantags if tag not in cache_system2._DIV_TAGS]
 
         self.logger.info(f'After: {tags} and {bantags}')
         if tags or bantags:
@@ -491,7 +491,8 @@ class Codeforces(commands.Cog):
     async def _nogud(self, ctx, member: discord.Member):
         active = cf_common.user_db.check_challenge(member.id)
         if not active:
-            await ctx.send(f'No active challenge found for user {member.display_name}.')
+            await ctx.send(f'No active challenge found for user `{member.display_name}`.')
+            return
         rc = cf_common.user_db.skip_challenge(member.id, active[0], Gitgud.FORCED_NOGUD)
         if rc == 1:
             await ctx.send(f'Challenge skip forced.')
