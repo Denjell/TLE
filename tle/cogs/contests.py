@@ -874,8 +874,9 @@ class Contests(commands.Cog):
             if len(rating_change) == 0:
                 # get rating of contestants from cache
                 # we want to have the rating before the contest we query for
+                await ctx.send('This will take a while')
                 from_cache = True
-                cached_ratings = cf_common.cache2.rating_changes_cache.get_all_ratings_before_timestamp(reqcontest[0].startTimeSeconds)
+                cached_ratings = await cf_common.cache2.rating_changes_cache.get_all_ratings_before_timestamp(reqcontest[0].startTimeSeconds)
                 for row in ranklist:
                     member = row.party.members[0].handle
                     # members not in cache are considered new (Unrated)
