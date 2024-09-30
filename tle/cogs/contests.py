@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import functools
 import json
 import logging
@@ -976,6 +977,36 @@ class Contests(commands.Cog):
         title = reqcontest[0].name
         embed = discord_common.cf_color_embed(description=table_str, title=title, url=url)
         await ctx.send(embed=embed)
+
+    async def _calc(self, ctx, contest_id: int, new_user_rating: int = -1):
+        contests = await cf.contest.list()
+        reqcontest = [contest for contest in contests if contest.id == contest_id]
+        combined = [contest for contest in contests if reqcontest[0].startTimeSeconds == contest.startTimeSeconds]
+
+
+        officialRatings, indicies, predictedRatings, predictedRatingsUnofficial = await self._calculatePrediction(combined, contest_id, new_user_rating)
+
+        # Output results
+        style = table.Style('{:<}  {:>}  {:>} {:>}')
+        t = table.Table(style)
+        t += table.Header('#', 'Official', 'Predicted (C)', 'Predicted (Unoff)')
+        t += table.Line()
+        for i, index in enumerate(indicies):
+            t += table.Data(f'{index}', f'{officialRatings[i]}', f'{predictedRatings[i]}', f'{predictedRatingsUnofficial[i]}')
+        table_str = f'```\n{t}\n```'
+        url = f'{cf.CONTEST_BASE_URL}{contest_id}'
+        title = reqcontest[0].name
+        embed = discord_common.cf_color_embed(description=table_str, title=title, url=url)
+        await ctx.send(embed=embed)
+
+    @commands.command(brief='Estimation of contest problem ratings', aliases=['probrat2'], usage='contest_id')
+    async def problemratings2(self, ctx, contest_id: int, new_user_rating: int = -1):
+        """Estimation of contest problem ratings
+        """
+        await ctx.send('This will take a while')
+        thread = threading.Thread(target=self._calc, args=(ctx, contest_id, new_user_rating))
+        thread.start()
+
 
     @discord_common.send_error_if(ContestCogError, rl.RanklistError,
                                   cache_system2.CacheError, cf_common.ResolveHandleError)
