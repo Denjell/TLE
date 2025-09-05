@@ -305,7 +305,9 @@ class Round(commands.Cog):
 
         points = await self._get_seq_response(self.bot, ctx, f"{ctx.author.mention} enter {problem_cnt} space seperated integer denoting the points of problems (between 100 and 10,000)", 60, problem_cnt, ctx.author, [100, 10000])
 
-        repeat = await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} do you want a new problem to appear when someone solves a problem (type 1 for yes and 0 for no)", 30, ctx.author, [0, 1])
+        scoring = await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} choose a scoring method (0 for classic Lockout (Only first gets all points) OR 1 for CF-style scoring (Faster solve gets more points))", 30, ctx.author, [0, 1])
+
+        repeat = 0 if scoring == 1 else await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} do you want a new problem to appear when someone solves a problem (type 1 for yes OR 0 for no)", 30, ctx.author, [0, 1])
 
         # pick problems
         submissions = [await cf.user.status(handle=handle) for handle in handles]        
@@ -317,7 +319,7 @@ class Round(commands.Cog):
 
         await ctx.send(embed=discord.Embed(description="Starting the round...", color=discord.Color.green()))
 
-        cf_common.user_db.create_ongoing_round(ctx.guild.id, int(time.time()), members, ratings, points, selected, duration, repeat)
+        cf_common.user_db.create_ongoing_round(ctx.guild.id, int(time.time()), members, ratings, points, selected, duration, repeat, scoring)
         round_info = cf_common.user_db.get_round_info(ctx.guild.id, members[0].id)
 
         await ctx.send(embed=self._round_problems_embed(round_info))

@@ -279,12 +279,13 @@ class UserDbConn:
                 "users" TEXT,
                 "rating" TEXT,
                 "points" TEXT,
-                "time" INT,
+                "time" INTEGER,
                 "problems" TEXT,
                 "status" TEXT,
                 "duration" INTEGER,
                 "repeat" INTEGER,
-                "times" TEXT
+                "times" TEXT,
+                "scoring" INTEGER
             )
         ''')
 
@@ -295,13 +296,14 @@ class UserDbConn:
                 "users" TEXT,
                 "rating" TEXT,
                 "points" TEXT,
-                "time" INT,
+                "time" INTEGER,
                 "problems" TEXT,
                 "status" TEXT,
                 "duration" INTEGER,
                 "repeat" INTEGER,
                 "times" TEXT,
-                "end_time" INT
+                "end_time" INTEGER,
+                "scoring" INTEGER
             )
             ''')
 
@@ -1193,10 +1195,10 @@ class UserDbConn:
         channel_id = self.conn.execute(query, (guild_id,)).fetchone()
         return int(channel_id[0]) if channel_id else None
 
-    def create_ongoing_round(self, guild_id, timestamp, users, rating, points, problems, duration, repeat):
+    def create_ongoing_round(self, guild_id, timestamp, users, rating, points, problems, duration, repeat, scoring):
         query = f'''
-            INSERT INTO lockout_ongoing_rounds (guild, users, rating, points, time, problems, status, duration, repeat, times)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO lockout_ongoing_rounds (guild, users, rating, points, time, problems, status, duration, repeat, times, scoring)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         '''
         cur = self.conn.cursor()
         cur.execute(query, (guild_id, ' '.join([f"{x.id}" for x in users]), 
@@ -1207,20 +1209,21 @@ class UserDbConn:
                                       ' '.join('0' for i in range(len(users))),
                                       duration, 
                                       repeat, 
-                                      ' '.join(['0'] * len(users)))
+                                      ' '.join(['0'] * len(users)),
+                                      scoring)
                     )
         self.conn.commit()
         cur.close()
 
     def create_finished_round(self, round_info, timestamp):
         query = f'''
-                    INSERT INTO lockout_finished_rounds (guild, users, rating, points, time, problems, status, duration, repeat, times, end_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO lockout_finished_rounds (guild, users, rating, points, time, problems, status, duration, repeat, times, end_time, scoring)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 '''
         cur = self.conn.cursor()
         cur.execute(query, (round_info.guild, round_info.users, round_info.rating, round_info.points, round_info.time,
                                 round_info.problems, round_info.status, round_info.duration, round_info.repeat,
-                                round_info.times, timestamp))
+                                round_info.times, timestamp, round_info.scoring))
         self.conn.commit()
         cur.close()                
 
@@ -1251,8 +1254,8 @@ class UserDbConn:
         cur.execute(query, (guild_id, f"%{users}%"))
         data = cur.fetchone()
         cur.close()
-        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times')
-        return Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10])
+        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times scoring')
+        return Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11])
 
     def check_if_user_in_ongoing_round(self, guild, user):
         query = f'''
@@ -1287,8 +1290,8 @@ class UserDbConn:
         cur.execute(query, (guild,))
         res = cur.fetchall()
         cur.close()
-        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times')
-        return [Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10]) for data in res]
+        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times scoring')
+        return [Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]) for data in res]
 
     def get_recent_rounds(self, guild, user=None):
         query = f'''
@@ -1300,8 +1303,8 @@ class UserDbConn:
         cur.execute(query, (guild, '%' if user is None else f'%{user}%'))
         res = cur.fetchall()
         cur.close()
-        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times end_time')
-        return [Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]) for data in res]
+        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times end_time scoring')
+        return [Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12]) for data in res]
 
     def close(self):
         self.conn.close()
