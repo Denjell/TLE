@@ -362,7 +362,7 @@ class SubFilter:
                 if len(arg) == 1:
                     raise ParamParseError('Problem tag cannot be empty.')
                 self.bantags.append(arg[1:])
-            elif arg[0:2] == 'd<':
+            elif arg[0:2] == 'd<': # these are still here to prevent them from staying in rest (they're handled above the if's though)
                 pass
             elif arg[0:3] == 'd>=':
                 pass
