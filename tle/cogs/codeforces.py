@@ -157,7 +157,7 @@ class Codeforces(commands.Cog):
 
         srating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
         erating = srating 
-        dlo,dhi = cf_common.pasre_daterange(args)
+        dlo,dhi = cf_common.parse_daterange(args)
         for arg in args:
             if arg[0:3].isdigit():
                 ratings = arg.split("-")
