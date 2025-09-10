@@ -247,13 +247,7 @@ class Dueling(commands.Cog):
         rating = round(rating, -2) if rating else suggested_rating
         rating = min(3500, max(rating, 800))
         unofficial = rating > _DUEL_OFFICIAL_CUTOFF #suggested_rating
-        dlo = 0
-        dhi = 10**10
-        for arg in args:
-            if arg[0:2] == 'd<':
-                dhi = min(dhi, cf_common.parse_date(arg[2:]))
-            elif arg[0:3] == 'd>=':
-                dlo = max(dlo, cf_common.parse_date(arg[3:]))
+        dlo,dhi = cf_common.parse_daterange(args)
         if not nohandicap:
             dtype = DuelType.ADJUNOFFICIAL if unofficial else DuelType.ADJOFFICIAL
         else:

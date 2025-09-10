@@ -307,6 +307,16 @@ def parse_rating(args, default_value = None):
             return int(arg)
     return default_value
 
+def parse_daterange(args):
+    dlo = 0
+    dhi = 10**10    
+    for arg in args:
+        if arg[0:2] == 'd<':
+            dhi = min(dhi, parse_date(arg[2:]))
+        elif arg[0:3] == 'd>=':
+            dlo = max(dlo, parse_date(arg[3:]))
+    return (dlo, dhi)
+
 def fix_urls(user: cf.User):
     if user.titlePhoto.startswith('//'):
         user = user._replace(titlePhoto = 'https:' + user.titlePhoto)
@@ -328,7 +338,7 @@ class SubFilter:
     def parse(self, args):
         args = list(set(args))
         rest = []
-
+        self.dlo, self.dhi = parse_daterange(args)
         for arg in args:
             if arg == '+team':
                 self.team = True
@@ -353,9 +363,9 @@ class SubFilter:
                     raise ParamParseError('Problem tag cannot be empty.')
                 self.bantags.append(arg[1:])
             elif arg[0:2] == 'd<':
-                self.dhi = min(self.dhi, parse_date(arg[2:]))
+                pass
             elif arg[0:3] == 'd>=':
-                self.dlo = max(self.dlo, parse_date(arg[3:]))
+                pass
             elif arg[0:3] in ['r<=', 'r>=']:
                 if len(arg) < 4:
                     raise ParamParseError(f'{arg} is an invalid rating argument')
