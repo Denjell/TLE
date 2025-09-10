@@ -205,7 +205,7 @@ class Dueling(commands.Cog):
         embed.add_field(name='Channel', value=channel.mention)
         await ctx.send(embed=embed)
 
-    @duel.command(brief='Challenge to a duel', usage='opponent [rating] [+tag..] [~tag..] [+divX] [~divX] [nohandicap]')
+    @duel.command(brief='Challenge to a duel', usage='opponent [rating] [+tag..] [~tag..] [+divX] [~divX] [nohandicap] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def challenge(self, ctx, opponent: discord.Member, *args):
         """Challenge another server member to a duel. Problem difficulty will be the lesser of duelist ratings minus 400. You can alternatively specify a different rating. 
         All duels will be rated. The challenge expires if ignored for 5 minutes.
@@ -246,7 +246,14 @@ class Dueling(commands.Cog):
         suggested_rating = round(lowest_rating, -2) + _DUEL_RATING_DELTA
         rating = round(rating, -2) if rating else suggested_rating
         rating = min(3500, max(rating, 800))
-        unofficial = rating > _DUEL_OFFICIAL_CUTOFF #suggested_rating 
+        unofficial = rating > _DUEL_OFFICIAL_CUTOFF #suggested_rating
+        dlo = 0
+        dhi = 10**10
+        for arg in args:
+            if arg[0:2] == 'd<':
+                dhi = min(dhi, cf_common.parse_date(arg[2:]))
+            elif arg[0:3] == 'd>=':
+                dlo = max(dlo, cf_common.parse_date(arg[3:]))
         if not nohandicap:
             dtype = DuelType.ADJUNOFFICIAL if unofficial else DuelType.ADJOFFICIAL
         else:
@@ -263,7 +270,8 @@ class Dueling(commands.Cog):
                     and not any(cf_common.is_contest_writer(prob.contestId, handle) for handle in handles)
                     and not cf_common.is_nonstandard_problem(prob)
                     and prob.matches_all_tags(tags)
-                    and not prob.matches_any_tag(bantags)]
+                    and not prob.matches_any_tag(bantags)
+                    and dlo <= cf_common.cache2.contest_cache.get_contest(prob.contestId).startTimeSeconds < dhi]
 
         for problems in map(get_problems, range(rating, 400, -100)):
             if problems:
