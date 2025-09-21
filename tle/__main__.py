@@ -79,6 +79,15 @@ async def main():
     # on_ready event handler rather than an on_ready listener.
     @discord_common.on_ready_event_once(bot)
     async def init():
+        # Populate Discord member cache for all guilds to prevent users being
+        # incorrectly marked as inactive after bot restart
+        for guild in bot.guilds:
+            try:
+                await guild.chunk()
+                logging.info(f'Fetched {len(guild.members)} members for guild {guild.name} (ID: {guild.id})')
+            except Exception as e:
+                logging.error(f'Failed to fetch members for guild {guild.name} (ID: {guild.id}): {e}')
+
         await cf_common.initialize(args.nodb)
         asyncio.create_task(discord_common.presence(bot))
 
