@@ -176,10 +176,16 @@ class UserDbConn:
         ''')
         self.conn.execute(
             'CREATE TABLE IF NOT EXISTS starboard ('
-            'guild_id     TEXT PRIMARY KEY,'
-            'channel_id   TEXT'
+            'guild_id        TEXT PRIMARY KEY,'
+            'channel_id      TEXT,'
+            'star_threshold  INTEGER NOT NULL'
             ')'
         )
+
+        columns = [i[1] for i in self.conn.execute('PRAGMA table_info(starboard)')]
+        if 'star_threshold' not in columns:
+            self.conn.execute('ALTER TABLE starboard ADD COLUMN star_threshold INTEGER NOT NULL')
+        
         self.conn.execute(
             'CREATE TABLE IF NOT EXISTS starboard_message ('
             'original_msg_id    TEXT PRIMARY KEY,'
@@ -555,17 +561,23 @@ class UserDbConn:
         self.conn.execute(query, (guild_id,))
         self.conn.commit()
 
-    def get_starboard(self, guild_id):
+    def get_starboard_channel(self, guild_id):
         query = ('SELECT channel_id '
                  'FROM starboard '
                  'WHERE guild_id = ?')
         return self.conn.execute(query, (guild_id,)).fetchone()
+    
+    def get_starboard_threshold(self, guild_id):
+        query = ('SELECT star_threshold '
+                 'FROM starboard '
+                 'WHERE guild_id = ?')
+        return self.conn.execute(query, (guild_id,)).fetchone()
 
-    def set_starboard(self, guild_id, channel_id):
+    def set_starboard(self, guild_id, channel_id, star_threshold):
         query = ('INSERT OR REPLACE INTO starboard '
-                 '(guild_id, channel_id) '
-                 'VALUES (?, ?)')
-        self.conn.execute(query, (guild_id, channel_id))
+                 '(guild_id, channel_id, star_threshold) '
+                 'VALUES (?, ?, ?)')
+        self.conn.execute(query, (guild_id, channel_id, star_threshold))
         self.conn.commit()
 
     def clear_starboard(self, guild_id):
