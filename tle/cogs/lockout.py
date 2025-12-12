@@ -198,7 +198,14 @@ class Round(commands.Cog):
 
         problems = [get_problem(prob.split('/')[0], prob.split('/')[1]) if prob != '0' else None for prob in problemEntries]
 
-        replacementStr = 'This problem has been solved' if round_info.repeat == 0 else 'No problems of this rating left'
+        # UPDATED: support repeat = 2
+        if round_info.repeat == 0:
+            replacementStr = 'This problem has been solved'
+        elif round_info.repeat == 1:
+            replacementStr = 'No problems of this rating left'
+        else:
+            replacementStr = 'This problem has been solved (kept active)'
+
         names = [f'[{prob[0].name}](https://codeforces.com/contest/{prob[0].contestId}/problem/{prob[0].index})' 
                     if prob is not None else replacementStr for prob in problems]
 
@@ -305,7 +312,17 @@ class Round(commands.Cog):
 
         points = await self._get_seq_response(self.bot, ctx, f"{ctx.author.mention} enter {problem_cnt} space seperated integer denoting the points of problems (between 100 and 10,000)", 60, problem_cnt, ctx.author, [100, 10000])
 
-        repeat = await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} do you want a new problem to appear when someone solves a problem (type 1 for yes and 0 for no)", 30, ctx.author, [0, 1])
+        repeat = await self._get_time_response(
+            self.bot,
+            ctx,
+            f"{ctx.author.mention} how should the problem behave when someone solves it?\n"
+            "Type **0** to lock the problem, so no one else can solve it.\n"
+            "Type **1** to replace it with a new one.\n"
+            "Type **2** to keep it as is, so anyone can solve it again (no lock, no replacement).",
+            30,
+            ctx.author,
+            [0, 2]
+        )
 
         # pick problems
         submissions = [await cf.user.status(handle=handle) for handle in handles]        
@@ -406,11 +423,14 @@ class Round(commands.Cog):
 
         judging, over, updated = False, False, False
 
+        # Track who has solved which problem in repeat=2 mode
+        if not hasattr(round_info, 'solved_problems_user'):
+            round_info.solved_problems_user = [set() for _ in problems]
+
         updates = []
         recent_subs = [await cf.user.status(handle=handle, count=RECENT_SUBS_LIMIT) for handle in handles]
         for i in range(len(problems)):
-            # Problem was solved before and no replacement -> skip
-            if problems[i] == '0':
+            if problems[i] == '0' and round_info.repeat in (0, 1):
                 updates.append([])
                 continue
 
@@ -426,23 +446,33 @@ class Round(commands.Cog):
             solved = []
             for j in range(len(user_ids)):
                 if times[j] != PROBLEM_STATUS_UNSOLVED and times[j] == min(times) and times[j] <= round_info.time + 60 * round_info.duration:
+                    if round_info.repeat == 2 and user_ids[j] in round_info.solved_problems_user[i]:
+                        continue
+
                     solved.append(user_ids[j])
                     status[j] += points[i]
-                    problems[i] = '0'
                     timestamp[j] = max(timestamp[j], min(times))
                     updated = True
+                    # Mark problem as solved for this user in repeat=2
+                    if round_info.repeat == 2:
+                        round_info.solved_problems_user[i].add(user_ids[j])
 
-            updates.append((solved))
+            updates.append(solved)
 
-            # Get new problem if repeat is set to 1
-            if len(solved) > 0 and round_info.repeat == 1:
-                try: 
-                    submissions = [await cf.user.status(handle=handle) for handle in handles]        
-                    solved = {sub.problem.name for subs in submissions for sub in subs if sub.verdict != 'COMPILATION_ERROR'} 
-                    problem = await self._pick_problem(handles, solved, rating[i], [])
-                    problems[i] = f'{problem.contestId}/{problem.index}'
-                except RoundCogError:
+            if len(solved) > 0:
+                if round_info.repeat == 0:
                     problems[i] = '0'
+                elif round_info.repeat == 1:
+                    try:
+                        submissions = [await cf.user.status(handle=handle) for handle in handles]
+                        solved_problems = {sub.problem.name for subs in submissions for sub in subs if sub.verdict != 'COMPILATION_ERROR'}
+                        problem = await self._pick_problem(handles, solved_problems, rating[i], [])
+                        problems[i] = f'{problem.contestId}/{problem.index}'
+                    except RoundCogError:
+                        problems[i] = '0'
+                else:
+                    # repeat==2 -> problem stays active, no replacement
+                    pass
 
         # If changes to the round state were made update the DB
         if updated:
