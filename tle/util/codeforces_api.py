@@ -374,7 +374,7 @@ async def _query_api(path: str, data: Any=None):
         logger.info(f'Querying CF API at {url} with {data}')
         # Explicitly state encoding (though aiohttp accepts gzip by default)
         headers = {'Accept-Encoding': 'gzip'}
-        async with _session.post(url, data=data, headers=headers) as resp:
+        async with _session.get(url, params=data, headers=headers) as resp:
             try:
                 respjson = await resp.json()
             except aiohttp.ContentTypeError:
@@ -427,16 +427,23 @@ class contest:
         show_unofficial: Optional[bool] = None,
     ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
         params = {'contestId': contest_id}
+        ## Comment (denjell): Current API does not allow for any other param than contestId
+        
         if from_ is not None:
-            params['from'] = from_
+            logger.error(f'contest.standings does not allow params other than contest_id, got from')
+            # params['from'] = from_
         if count is not None:
-            params['count'] = count
+            logger.error(f'contest.standings does not allow params other than contest_id, got count')
+            # params['count'] = count
         if handles is not None:
-            params['handles'] = ';'.join(handles)
+            logger.error(f'contest.standings does not allow params other than contest_id, got handles')
+            # params['handles'] = ';'.join(handles)
         if room is not None:
-            params['room'] = room
+            logger.error(f'contest.standings does not allow params other than contest_id, got room')
+            # params['room'] = room
         if show_unofficial is not None:
-            params['showUnofficial'] = _bool_to_str(show_unofficial)
+            logger.error(f'contest.standings does not allow params other than contest_id, got showUnofficial')
+            # params['showUnofficial'] = _bool_to_str(show_unofficial)
         try:
             resp = await _query_api('contest.standings', params)
         except TrueApiError as e:
