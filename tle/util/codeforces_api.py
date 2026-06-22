@@ -374,7 +374,7 @@ async def _query_api(path: str, data: Any=None):
         logger.info(f'Querying CF API at {url} with {data}')
         # Explicitly state encoding (though aiohttp accepts gzip by default)
         headers = {'Accept-Encoding': 'gzip'}
-        async with _session.post(url, data=data, headers=headers) as resp:
+        async with _session.get(url, params=data, headers=headers) as resp:
             try:
                 respjson = await resp.json()
             except aiohttp.ContentTypeError:
