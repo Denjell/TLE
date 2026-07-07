@@ -1,13 +1,17 @@
 import asyncio
 from collections import defaultdict, deque, namedtuple
 import functools
+import hashlib
 import itertools
 import logging
+import random
+import string
 import time
 from typing import Any, Dict, Iterable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 import aiohttp
 from discord.ext import commands
 
+from tle import constants
 from tle.util import codeforces_common as cf_common
 
 # ruff: noqa: N815
@@ -367,14 +371,45 @@ def cf_ratelimit(f):
     return wrapped
 
 
+def _sign_request(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Add apiKey, time, and apiSig to params using the CF authorization scheme.
+
+    Algorithm (from codeforces.com/apiHelp):
+      1. rand = random 6-char alphanumeric prefix
+      2. Add apiKey and time to params
+      3. Sort params lexicographically, build query string
+      4. hash_input = f"{rand}/{method}?{query_string}#{CF_API_SECRET}"
+      5. apiSig = rand + SHA-512(hash_input)
+    """
+    params = dict(params)
+    params['apiKey'] = constants.CF_API_KEY
+    params['time'] = str(int(time.time()))
+
+    rand = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    sorted_params = '&'.join(f'{k}={v}' for k, v in sorted(params.items()))
+    hash_input = f'{rand}/{method}?{sorted_params}#{constants.CF_API_SECRET}'
+    sig = hashlib.sha512(hash_input.encode()).hexdigest()
+    params['apiSig'] = rand + sig
+    return params
+
+
 @cf_ratelimit
-async def _query_api(path: str, data: Any=None):
+async def _query_api(path: str, data: Any = None):
     url = API_BASE_URL + path
+    params = dict(data) if data else {}
+    headers = {'Accept-Encoding': 'gzip'}
+
+    use_auth = bool(constants.CF_API_KEY and constants.CF_API_SECRET)
     try:
-        logger.info(f'Querying CF API at {url} with {data}')
-        # Explicitly state encoding (though aiohttp accepts gzip by default)
-        headers = {'Accept-Encoding': 'gzip'}
-        async with _session.get(url, params=data, headers=headers) as resp:
+        if use_auth:
+            signed = _sign_request(path, params)
+            logger.info(f'Querying CF API (authorized) at {url}')
+            ctx = _session.post(url, data=signed, headers=headers)
+        else:
+            logger.info(f'Querying CF API at {url} with {params}')
+            ctx = _session.get(url, params=params, headers=headers)
+
+        async with ctx as resp:
             try:
                 respjson = await resp.json()
             except aiohttp.ContentTypeError:
@@ -427,23 +462,18 @@ class contest:
         show_unofficial: Optional[bool] = None,
     ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
         params = {'contestId': contest_id}
-        ## Comment (denjell): Current API does not allow for any other param than contestId
-        
-        if from_ is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got from')
-            # params['from'] = from_
-        if count is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got count')
-            # params['count'] = count
-        if handles is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got handles')
-            # params['handles'] = ';'.join(handles)
-        if room is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got room')
-            # params['room'] = room
-        if show_unofficial is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got showUnofficial')
-            # params['showUnofficial'] = _bool_to_str(show_unofficial)
+        # Extra params require an authorized request (authenticated via apiKey/apiSig)
+        if constants.CF_API_KEY and constants.CF_API_SECRET:
+            if from_ is not None:
+                params['from'] = from_
+            if count is not None:
+                params['count'] = count
+            if handles is not None:
+                params['handles'] = ';'.join(handles)
+            if room is not None:
+                params['room'] = room
+            if show_unofficial is not None:
+                params['showUnofficial'] = _bool_to_str(show_unofficial)
         try:
             resp = await _query_api('contest.standings', params)
         except TrueApiError as e:
