@@ -42,6 +42,7 @@ class CacheControl(commands.Cog):
     @commands.has_role(constants.TLE_ADMIN)
     @timed_command
     async def problems(self, ctx):
+        # DB: problem
         await cf_common.cache2.problem_cache.reload_now()
 
     @cache.command(usage='[missing|all|contest_id]')
@@ -73,6 +74,7 @@ class CacheControl(commands.Cog):
         """Mode 'all' clears all existing cached problems. Mode 'contest_id'
         clears existing problems with the given contest id.
         """
+        # DB: problem2
         if contest_id == 'all':
             await ctx.send('This will take a while')
             count = await cf_common.cache2.problemset_cache.update_for_all()

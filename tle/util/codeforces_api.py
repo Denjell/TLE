@@ -483,7 +483,7 @@ def user_info_chunkify(handles: Iterable[str]) -> Iterator[List[str]]:
     """Yields chunks of handles that can be queried with user.info."""
     # Querying user.info using POST requests is limited to 10000 handles or 2**16
     # bytes, so requests might need to be split into chunks
-    SIZE_LIMIT = 2**16
+    SIZE_LIMIT = 7000
     HANDLE_LIMIT = 10000
     chunk = []
     size = 0
