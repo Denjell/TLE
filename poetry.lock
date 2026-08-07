@@ -120,7 +120,7 @@ python-versions = ">=3.6"
 
 [[package]]
 name = "discord.py"
-version = "2.1.0"
+version = "2.1.1"
 description = "A Python wrapper for the Discord API"
 category = "main"
 optional = false
