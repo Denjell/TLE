@@ -1,0 +1,22 @@
+name: Docker Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t tle-bot .
+      - name: Create minimal env file for testing
+        run: |
+          echo "BOT_TOKEN=dummy_token" > .env.test
+          echo "LOGGING_COG_CHANNEL_ID=123456789012345678" >> .env.test
+      - name: Verify Docker image
+        run: |
+          docker run --rm --env-file .env.test tle-bot python -c "import tle; print('Import successful')"

@@ -1,0 +1,32 @@
+target-version = "py311"
+line-length = 88
+indent-width = 4
+
+extend-exclude = [
+    ".cache",
+    ".venv",
+    "data",
+]
+
+[lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "B904",  # Within an except clause, raise exceptions with raise ... from err
+]
+
+[lint.per-file-ignores]
+"tle/util/db/__init__.py" = ["F403"]  # Star imports
+"tle/util/ranklist/__init__.py" = ["F403"]  # Star imports
+"tle/cogs/handles.py" = ["E402"]  # GTK requires version setting before import
+"tle/util/events.py" = ["E722"]  # Intentional bare except in event error handler
+
+[format]
+line-ending = "lf"
+quote-style = "single"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[lint.isort]
+case-sensitive = true
+combine-as-imports = true
+order-by-type = true

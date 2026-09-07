@@ -283,19 +283,19 @@ class Training(commands.Cog):
         """
         await ctx.send_help(ctx.command)
 
-    def _checkIfCorrectChannel(self, ctx):
-        training_channel_id = cf_common.user_db.get_training_channel(
+    async def _checkIfCorrectChannel(self, ctx):
+        training_channel_id = await self.bot.user_db.get_training_channel(
             ctx.guild.id)
         if not training_channel_id or ctx.channel.id != training_channel_id:
             raise TrainingCogError(
                 'You must use this command in training channel.')
 
     async def _getActiveTraining(self, user_id):
-        active = cf_common.user_db.get_active_training(user_id)
+        active = await self.bot.user_db.get_active_training(user_id)
         return active
 
     async def _getLatestTraining(self, user_id):
-        latest = cf_common.user_db.get_latest_training(user_id)
+        latest = await self.bot.user_db.get_latest_training(user_id)
         return latest
 
     def _extractArgs(self, args):
@@ -362,8 +362,8 @@ class Training(commands.Cog):
 
     async def _pickTrainingProblem(self, handle, rating, submissions, user_id):
         solved = {sub.problem.name for sub in submissions}
-        skips = cf_common.user_db.get_training_skips(user_id)
-        problems = [prob for prob in cf_common.cache2.problem_cache.problems
+        skips = await self.bot.user_db.get_training_skips(user_id)
+        problems = [prob for prob in self.bot.cf_cache.problem_cache.problems
                     if (prob.rating == rating and
                         prob.name not in solved and
                         prob.name not in skips)]
@@ -377,7 +377,7 @@ class Training(commands.Cog):
         if not problems:
             raise TrainingCogError(
                 'No problem to assign. Start of training failed.')
-        problems.sort(key=lambda problem: cf_common.cache2.contest_cache.get_contest(
+        problems.sort(key=lambda problem: self.bot.cf_cache.contest_cache.get_contest(
             problem.contestId).startTimeSeconds)
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
@@ -433,7 +433,7 @@ class Training(commands.Cog):
     async def _postProblem(self, ctx, handle, problemName, problemIndex, problemContestId, problemRating, issue_time, gamestate, new: bool = True):
         url = f'{cf.CONTEST_BASE_URL}{problemContestId}/problem/{problemIndex}'
         title = f'{problemIndex}. {problemName}'
-        desc = cf_common.cache2.contest_cache.get_contest(
+        desc = self.bot.cf_cache.contest_cache.get_contest(
             problemContestId).name
         embed = discord.Embed(title=title, url=url,
                               description=desc, color=0x008000)
@@ -449,12 +449,12 @@ class Training(commands.Cog):
 
     async def _postTrainingStatistics(self, ctx, active, handle, gamestate, finished=True, past=False):
         training_id = active[0]
-        numSkips = cf_common.user_db.train_get_num_skips(training_id)
-        numSolves = cf_common.user_db.train_get_num_solves(training_id)
-        numSlowSolves = cf_common.user_db.train_get_num_slow_solves(
+        numSkips = await self.bot.user_db.train_get_num_skips(training_id)
+        numSolves = await self.bot.user_db.train_get_num_solves(training_id)
+        numSlowSolves = await self.bot.user_db.train_get_num_slow_solves(
             training_id)
-        maxRating = cf_common.user_db.train_get_max_rating(training_id)
-        startRating = cf_common.user_db.train_get_start_rating(training_id)
+        maxRating = await self.bot.user_db.train_get_max_rating(training_id)
+        startRating = await self.bot.user_db.train_get_start_rating(training_id)
 
         text = ''
         title = f'Current training session of `{handle}`'
@@ -484,7 +484,7 @@ class Training(commands.Cog):
         # The caller of this function is responsible for calling `_validate_training_status` first.
         user_id = ctx.author.id
         issue_time = datetime.datetime.now().timestamp()
-        rc = cf_common.user_db.new_training(
+        rc = await self.bot.user_db.new_training(
             user_id, issue_time, problem, gamestate.mode, gamestate.score, gamestate.lives, gamestate.timeleft)
         if rc != 1:
             raise TrainingCogError(
@@ -496,7 +496,7 @@ class Training(commands.Cog):
     async def _assignNewTrainingProblem(self, ctx, active, handle, problem, gamestate):
         training_id, _, _, _, _, _, _, _, _, _ = active
         issue_time = datetime.datetime.now().timestamp()
-        rc = cf_common.user_db.assign_training_problem(
+        rc = await self.bot.user_db.assign_training_problem(
             training_id, issue_time, problem)
         if rc == 1:
             await self._postProblem(ctx, handle, problem.name, problem.index, problem.contestId, problem.rating, issue_time, gamestate)
@@ -507,7 +507,7 @@ class Training(commands.Cog):
     async def _completeCurrentTrainingProblem(self, ctx, active, handle, finish_time, duration, gamestate, success):
         training_id, _, name, contest_id, index, _, _, _, _, timeleft = active
         status = self._getStatus(success)
-        rc = cf_common.user_db.end_current_training_problem(
+        rc = await self.bot.user_db.end_current_training_problem(
             training_id, finish_time, status, gamestate.score, gamestate.lives, gamestate.timeleft)
         if rc == 1:
             await self._postProblemFinished(ctx, handle, name, contest_id, index, duration, gamestate, success, timeleft)
@@ -521,7 +521,7 @@ class Training(commands.Cog):
     async def _finishCurrentTraining(self, ctx, active):
         training_id, _, _, _, _, _, _, _, _, _ = active
 
-        rc = cf_common.user_db.finish_training(training_id)
+        rc = await self.bot.user_db.finish_training(training_id)
         if rc == -1:
             raise TrainingCogError("You already ended your training!")
 
@@ -549,7 +549,7 @@ class Training(commands.Cog):
             - It is possible to change the start rating from 800 to any other valid rating
         """
         # check if we are in the correct channel
-        self._checkIfCorrectChannel(ctx)
+        await self._checkIfCorrectChannel(ctx)
 
         # get cf handle
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -577,7 +577,7 @@ class Training(commands.Cog):
         """
 
         # check if we are in the correct channel
-        self._checkIfCorrectChannel(ctx)
+        await self._checkIfCorrectChannel(ctx)
 
         # get cf handle
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -616,7 +616,7 @@ class Training(commands.Cog):
         """ Use this command if you want to skip your current training problem. If not in infinite mode this will reduce your lives by 1.
         """
         # check if we are in the correct channel
-        self._checkIfCorrectChannel(ctx)
+        await self._checkIfCorrectChannel(ctx)
 
         # get cf handle
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -653,7 +653,7 @@ class Training(commands.Cog):
         """ Use this command to end the current training session. 
         """
         # check if we are in the correct channel
-        self._checkIfCorrectChannel(ctx)
+        await self._checkIfCorrectChannel(ctx)
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
 
         # check game running
@@ -682,7 +682,7 @@ class Training(commands.Cog):
         """
         member = member or ctx.author
         # check if we are in the correct channel
-        self._checkIfCorrectChannel(ctx)
+        await self._checkIfCorrectChannel(ctx)
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(member),))
 
         # check game running
@@ -701,14 +701,14 @@ class Training(commands.Cog):
     @training.command(brief="Show fastest training solves")
     async def fastest(self, ctx, *args):
         """Show a list of fastest solves within a training session for each rating."""
-        res = cf_common.user_db.train_get_fastest_solves()
-        
+        res = await self.bot.user_db.train_get_fastest_solves()
+
         rankings = []
         index = 0
         for user_id, rating, time in res:
             member = ctx.guild.get_member(int(user_id))
-            handle = cf_common.user_db.get_handle(user_id, ctx.guild.id)
-            user = cf_common.user_db.fetch_cf_user(handle)
+            handle = await self.bot.user_db.get_handle(user_id, ctx.guild.id)
+            user = await self.bot.user_db.fetch_cf_user(handle)
             if user is None:
                 continue
             user_rating = user.rating
@@ -729,14 +729,14 @@ class Training(commands.Cog):
     async def set_channel(self, ctx):
         """ Sets the training channel to the current channel.
         """
-        cf_common.user_db.set_training_channel(ctx.guild.id, ctx.channel.id)
+        await self.bot.user_db.set_training_channel(ctx.guild.id, ctx.channel.id)
         await ctx.send(embed=discord_common.embed_success('Training channel saved successfully'))
 
     @training.command(brief='Get the training channel')
     async def get_channel(self, ctx):
         """ Gets the training channel.
         """
-        channel_id = cf_common.user_db.get_training_channel(ctx.guild.id)
+        channel_id = await self.bot.user_db.get_training_channel(ctx.guild.id)
         channel = ctx.guild.get_channel(channel_id)
         if channel is None:
             raise TrainingCogError('There is no training channel')

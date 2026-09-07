@@ -1,79 +1,84 @@
+import asyncio
+import datetime
 import functools
+import itertools
 import json
 import logging
 import math
 import time
-import datetime
 from collections import defaultdict
-import itertools
-from discord.ext import commands
+from collections.abc import Callable, Iterable
+from typing import Any
+
 import discord
+from discord.ext import commands
 
 from tle import constants
-from tle.util import cache_system2
-from tle.util import codeforces_api as cf
-from tle.util import db
-from tle.util import events
+from tle.util import codeforces_api as cf, db, events
+from tle.util.cache import CacheSystem, ContestNotFound
 
 logger = logging.getLogger(__name__)
 
 # Connection to database
-user_db = None
+user_db: Any = None
 
 # Cache system
-cache2 = None
+cf_cache: Any = None
 
 # Event system
 event_sys = events.EventSystem()
 
-_contest_id_to_writers_map = None
+_contest_id_to_writers_map: dict[int, list[str]] | None = None
 
-_initialize_done = False
-
-active_groups = defaultdict(set)
+active_groups: defaultdict[str, set[int]] = defaultdict(set)
 
 
-async def initialize(nodb):
-    global cache2
+async def initialize(bot: Any, nodb: bool) -> None:
+    global cf_cache
     global user_db
     global event_sys
     global _contest_id_to_writers_map
-    global _initialize_done
-
-    if _initialize_done:
-        # This happens if the bot loses connection to Discord and on_ready is triggered again
-        # when it reconnects.
-        return
 
     await cf.initialize()
 
     if nodb:
         user_db = db.DummyUserDbConn()
     else:
-        user_db = db.UserDbConn(constants.USER_DB_FILE_PATH)
+        user_db = db.UserDbConn(str(constants.USER_DB_FILE_PATH))
+        await user_db.connect()
 
-    cache_db = db.CacheDbConn(constants.CACHE_DB_FILE_PATH)
-    cache2 = cache_system2.CacheSystem(cache_db)
-    await cache2.run()
+    cache_db = db.CacheDbConn(str(constants.CACHE_DB_FILE_PATH))
+    await cache_db.connect()
+    cf_cache = CacheSystem(cache_db)
+    await cf_cache.run()
+
+    # Attach services to bot for cog access via self.bot
+    bot.user_db = user_db
+    bot.cf_cache = cf_cache
+    bot.event_sys = event_sys
 
     try:
         with open(constants.CONTEST_WRITERS_JSON_FILE_PATH) as f:
             data = json.load(f)
-        _contest_id_to_writers_map = {contest['id']: [s.lower() for s in contest['writers']] for contest in data}
+        _contest_id_to_writers_map = {
+            contest['id']: [s.lower() for s in contest['writers']] for contest in data
+        }
         logger.info('Contest writers loaded from JSON file')
     except FileNotFoundError:
         logger.warning('JSON file containing contest writers not found')
 
-    _initialize_done = True
-
 
 # algmyr's guard idea:
-def user_guard(*, group, get_exception=None):
+def user_guard(
+    *, group: str, get_exception: Callable[[], Exception] | None = None
+) -> Callable[..., Any]:
     active = active_groups[group]
 
-    def guard(fun):
+    def guard(fun: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fun)
-        async def f(self, ctx, *args, **kwargs):
+        async def f(
+            self: Any, ctx: commands.Context, *args: Any, **kwargs: Any
+        ) -> None:
             user = ctx.message.author.id
             if user in active:
                 logger.info(f'{user} repeatedly calls {group} group')
@@ -91,56 +96,76 @@ def user_guard(*, group, get_exception=None):
     return guard
 
 
-def is_contest_writer(contest_id, handle):
+def is_contest_writer(contest_id: int, handle: str) -> bool:
     if _contest_id_to_writers_map is None:
         return False
     writers = _contest_id_to_writers_map.get(contest_id)
-    return writers and handle.lower() in writers
+    return bool(writers and handle.lower() in writers)
 
 
 _NONSTANDARD_CONTEST_INDICATORS = [
-    'wild', 'fools', 'unrated', 'surprise', 'unknown', 'friday', 'q#', 'testing',
-    'marathon', 'kotlin', 'onsite', 'experimental', 'abbyy', 'icpc']
+    'wild',
+    'fools',
+    'unrated',
+    'surprise',
+    'unknown',
+    'friday',
+    'q#',
+    'testing',
+    'marathon',
+    'kotlin',
+    'onsite',
+    'experimental',
+    'abbyy',
+    'icpc',
+]
 
 
-def is_nonstandard_contest(contest):
-    return any(string in contest.name.lower() for string in _NONSTANDARD_CONTEST_INDICATORS)
-
-def is_nonstandard_problem(problem):
-    return (is_nonstandard_contest(cache2.contest_cache.get_contest(problem.contestId)) or
-            problem.matches_all_tags(['*special']))
+def is_nonstandard_contest(contest: cf.Contest) -> bool:
+    return any(
+        string in contest.name.lower() for string in _NONSTANDARD_CONTEST_INDICATORS
+    )
 
 
-async def get_visited_contests(handles : [str]):
-    """ Returns a set of contest ids of contests that any of the given handles
-        has at least one non-CE submission.
+def is_nonstandard_problem(problem: cf.Problem) -> bool:
+    return is_nonstandard_contest(
+        cf_cache.contest_cache.get_contest(problem.contestId)
+    ) or problem.matches_all_tags(['*special'])
+
+
+async def get_visited_contests(handles: list[str]) -> set[int]:
+    """Returns a set of contest ids of contests that any of the given handles
+    has at least one non-CE submission.
     """
-    user_submissions = [await cf.user.status(handle=handle) for handle in handles]
-    problem_to_contests = cache2.problemset_cache.problem_to_contests
+    user_submissions = await asyncio.gather(
+        *(cf.user.status(handle=handle) for handle in handles)
+    )
+    problem_to_contests = cf_cache.problemset_cache.problem_to_contests
 
     contest_ids = []
     for sub in itertools.chain.from_iterable(user_submissions):
         if sub.verdict == 'COMPILATION_ERROR':
             continue
         try:
-            contest = cache2.contest_cache.get_contest(sub.problem.contestId)
+            contest = cf_cache.contest_cache.get_contest(sub.problem.contestId)
             problem_id = (sub.problem.name, contest.startTimeSeconds)
             contest_ids += problem_to_contests[problem_id]
-        except cache_system2.ContestNotFound:
+        except ContestNotFound:
             pass
     return set(contest_ids)
 
-# These are special rated-for-all contests which have a combined ranklist for onsite and online
-# participants. The onsite participants have their submissions marked as out of competition. Just
-# Codeforces things.
+
+# These are special rated-for-all contests which have a combined ranklist for
+# onsite and online participants. The onsite participants have their
+# submissions marked as out of competition. Just Codeforces things.
 _RATED_FOR_ONSITE_CONTEST_IDS = [
-    86,   # Yandex.Algorithm 2011 Round 2 https://codeforces.com/contest/86
+    86,  # Yandex.Algorithm 2011 Round 2 https://codeforces.com/contest/86
     173,  # Croc Champ 2012 - Round 1 https://codeforces.com/contest/173
     335,  # MemSQL start[c]up Round 2 - online version https://codeforces.com/contest/335
 ]
 
 
-def is_rated_for_onsite_contest(contest):
+def is_rated_for_onsite_contest(contest: cf.Contest) -> bool:
     return contest.id in _RATED_FOR_ONSITE_CONTEST_IDS
 
 
@@ -149,36 +174,44 @@ class ResolveHandleError(commands.CommandError):
 
 
 class HandleCountOutOfBoundsError(ResolveHandleError):
-    def __init__(self, mincnt, maxcnt):
+    def __init__(self, mincnt: int, maxcnt: int) -> None:
         super().__init__(f'Number of handles must be between {mincnt} and {maxcnt}')
 
 
 class FindMemberFailedError(ResolveHandleError):
-    def __init__(self, member):
+    def __init__(self, member: str) -> None:
         super().__init__(f'Unable to convert `{member}` to a server member')
 
 
 class HandleNotRegisteredError(ResolveHandleError):
-    def __init__(self, member):
-        super().__init__(f'Codeforces handle for {member.mention} not found in database. '
-                          'Use ;handle identify <cfhandle> (where <cfhandle> needs to be replaced with your codeforces handle, e.g. ;handle identify tourist) to add yourself to the database')
+    def __init__(self, member: discord.Member) -> None:
+        super().__init__(
+            f'Codeforces handle for {member.mention} not found in database. '
+            'Use ;handle identify <cfhandle> (where <cfhandle> needs to be replaced '
+            'with your codeforces handle, e.g. ;handle identify tourist) to add '
+            'yourself to the database'
+        )
 
 
 class HandleIsVjudgeError(ResolveHandleError):
-    HANDLES = ('vjudge1 vjudge2 vjudge3 vjudge4 vjudge5 '
-               'luogu_bot1 luogu_bot2 luogu_bot3 luogu_bot4 luogu_bot5').split()
+    HANDLES = """
+        vjudge1 vjudge2 vjudge3 vjudge4 vjudge5
+        luogu_bot1 luogu_bot2 luogu_bot3 luogu_bot4 luogu_bot5
+    """.split()
 
-    def __init__(self, handle):
+    def __init__(self, handle: str) -> None:
         super().__init__(f"`{handle}`? I'm not doing that!\n\n(╯°□°）╯︵ ┻━┻")
 
 
 class FilterError(commands.CommandError):
     pass
 
+
 class ParamParseError(FilterError):
     pass
 
-def time_format(seconds):
+
+def time_format(seconds: float) -> tuple[int, int, int, int]:
     seconds = int(seconds)
     days, seconds = divmod(seconds, 86400)
     hours, seconds = divmod(seconds, 3600)
@@ -186,7 +219,13 @@ def time_format(seconds):
     return days, hours, minutes, seconds
 
 
-def pretty_time_format(seconds, *, shorten=False, only_most_significant=False, always_seconds=False):
+def pretty_time_format(
+    seconds: float,
+    *,
+    shorten: bool = False,
+    only_most_significant: bool = False,
+    always_seconds: bool = False,
+) -> str:
     days, hours, minutes, seconds = time_format(seconds)
     timespec = [
         (days, 'day', 'days'),
@@ -199,58 +238,74 @@ def pretty_time_format(seconds, *, shorten=False, only_most_significant=False, a
     if only_most_significant:
         timeprint = [timeprint[0]]
 
-    def format_(triple):
+    def format_(triple: tuple[int, str, str]) -> str:
         cnt, singular, plural = triple
-        return f'{cnt}{singular[0]}' if shorten else f'{cnt} {singular if cnt == 1 else plural}'
+        return (
+            f'{cnt}{singular[0]}'
+            if shorten
+            else f'{cnt} {singular if cnt == 1 else plural}'
+        )
 
     return ' '.join(map(format_, timeprint))
 
-def get_start_and_end_of_month(time):
+
+def get_start_and_end_of_month(time: datetime.datetime) -> tuple[int, int]:
+    """Returns (start, end) unix timestamps for the calendar month containing `time`."""
     time = time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     start_time = int(time.timestamp())
     if time.month == 12:
-        time = time.replace(month=1,year=time.year+1)
+        time = time.replace(month=1, year=time.year + 1)
     else:
-        time = time.replace(month=time.month+1)
+        time = time.replace(month=time.month + 1)
     end_time = int(time.timestamp())
     return start_time, end_time
 
 
-def days_ago(t):
-    days = (time.time() - t)/(60*60*24)
+def days_ago(t: float) -> str:
+    days = (time.time() - t) / (60 * 60 * 24)
     if days < 1:
         return 'today'
     if days < 2:
         return 'yesterday'
     return f'{math.floor(days)} days ago'
 
-async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, default_to_all_server=False):
-    """Convert an iterable of strings to CF handles. A string beginning with ! indicates Discord username,
-     otherwise it is a raw CF handle to be left unchanged."""
+
+async def resolve_handles(
+    ctx: commands.Context,
+    converter: Any,
+    handles: Iterable[str],
+    *,
+    mincnt: int = 1,
+    maxcnt: int | None = 5,
+    default_to_all_server: bool = False,
+) -> list[str]:
+    """Convert an iterable of strings to CF handles.
+
+    A string beginning with ! indicates Discord username, otherwise it is a raw
+    CF handle to be left unchanged.
+    """
     handles = set(handles)
     if default_to_all_server and not handles:
         handles.add('+server')
     if '+server' in handles:
         handles.remove('+server')
-        guild_handles = {handle for discord_id, handle
-                            in user_db.get_handles_for_guild(ctx.guild.id)}
+        guild_handles = {
+            handle
+            for discord_id, handle in await user_db.get_handles_for_guild(ctx.guild.id)
+        }
         handles.update(guild_handles)
-    if len(handles) < mincnt or (maxcnt and maxcnt < len(handles)):
-        raise HandleCountOutOfBoundsError(mincnt, maxcnt)
+    if len(handles) < mincnt or (maxcnt is not None and maxcnt < len(handles)):
+        raise HandleCountOutOfBoundsError(mincnt, maxcnt or 0)
     resolved_handles = []
     for handle in handles:
         if handle.startswith('!'):
             # ! denotes Discord user
             member_identifier = handle[1:]
-            # suffix removal as quickfix for new username changes
-            if member_identifier[-2:] == '#0':
-                member_identifier = member_identifier[:-2]
-
             try:
                 member = await converter.convert(ctx, member_identifier)
             except commands.errors.CommandError:
                 raise FindMemberFailedError(member_identifier)
-            handle = user_db.get_handle(member.id, ctx.guild.id)
+            handle = await user_db.get_handle(member.id, ctx.guild.id)
             if handle is None:
                 raise HandleNotRegisteredError(member)
         if handle in HandleIsVjudgeError.HANDLES:
@@ -258,16 +313,23 @@ async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, defaul
         resolved_handles.append(handle)
     return resolved_handles
 
-def members_to_handles(members: [discord.Member], guild_id):
+
+async def members_to_handles(
+    members: Iterable[discord.Member],
+    guild_id: int,
+) -> list[str]:
     handles = []
     for member in members:
-        handle = user_db.get_handle(member.id, guild_id)
+        handle = await user_db.get_handle(member.id, guild_id)
         if handle is None:
             raise HandleNotRegisteredError(member)
         handles.append(handle)
     return handles
 
-def filter_flags(args, params):
+
+def filter_flags(
+    args: Iterable[str], params: list[str]
+) -> tuple[list[bool], list[str]]:
     args = list(args)
     flags = [False] * len(params)
     rest = []
@@ -278,10 +340,12 @@ def filter_flags(args, params):
             rest.append(arg)
     return flags, rest
 
-def negate_flags(*args):
+
+def negate_flags(*args: bool) -> list[bool]:
     return [not x for x in args]
 
-def parse_date(arg):
+
+def parse_date(arg: str) -> float:
     try:
         if len(arg) == 8:
             fmt = '%d%m%Y'
@@ -296,55 +360,56 @@ def parse_date(arg):
         raise ParamParseError(f'{arg} is an invalid date argument')
 
 
-def parse_tags(args, *, prefix):
+def parse_tags(args: Iterable[str], *, prefix: str) -> list[str]:
     tags = [x[1:] for x in args if x[0] == prefix]
     return tags
 
 
-def parse_rating(args, default_value = None):
+def parse_rating(args: Iterable[str], default_value: int | None = None) -> int | None:
     for arg in args:
         if arg.isdigit():
             return int(arg)
     return default_value
 
-def parse_daterange(args):
-    dlo = 0
-    dhi = 10**10    
+
+def parse_daterange(args: Iterable[str]) -> tuple[float, float]:
+    dlo: float = 0
+    dhi: float = 10**10
     for arg in args:
         if arg[0:2] == 'd<':
             dhi = min(dhi, parse_date(arg[2:]))
         elif arg[0:3] == 'd>=':
             dlo = max(dlo, parse_date(arg[3:]))
-    return (dlo, dhi)
+    return dlo, dhi
 
-def fix_urls(user: cf.User):
-    if user.titlePhoto.startswith('//'):
-        user = user._replace(titlePhoto = 'https:' + user.titlePhoto)
-    return user
+
+# Canonical implementation lives in codeforces_api, next to the User type.
+fix_urls = cf.fix_urls
 
 
 class SubFilter:
-    def __init__(self, rated=True):
+    def __init__(self, rated: bool = True) -> None:
         self.team = False
         self.rated = rated
-        self.dlo, self.dhi = 0, 10**10
+        self.dlo: float = 0
+        self.dhi: float = 10**10
         self.rlo, self.rhi = 500, 3800
-        self.types = []
-        self.tags = []
-        self.bantags = []
-        self.contests = []
-        self.indices = []
+        self.types: list[str] = []
+        self.tags: list[str] = []
+        self.bantags: list[str] = []
+        self.contests: list[str] = []
+        self.indices: list[str] = []
 
-    def parse(self, args):
+    def parse(self, args: Iterable[str]) -> list[str]:
         args = list(set(args))
         rest = []
-        self.dlo, self.dhi = parse_daterange(args)
+
         for arg in args:
             if arg == '+team':
                 self.team = True
             elif arg == '+contest':
                 self.types.append('CONTESTANT')
-            elif arg =='+outof':
+            elif arg == '+outof':
                 self.types.append('OUT_OF_COMPETITION')
             elif arg == '+virtual':
                 self.types.append('VIRTUAL')
@@ -362,10 +427,10 @@ class SubFilter:
                 if len(arg) == 1:
                     raise ParamParseError('Problem tag cannot be empty.')
                 self.bantags.append(arg[1:])
-            elif arg[0:2] == 'd<': # these are still here to prevent them from staying in rest (they're handled above the if's though)
-                pass
+            elif arg[0:2] == 'd<':
+                self.dhi = min(self.dhi, parse_date(arg[2:]))
             elif arg[0:3] == 'd>=':
-                pass
+                self.dlo = max(self.dlo, parse_date(arg[3:]))
             elif arg[0:3] in ['r<=', 'r>=']:
                 if len(arg) < 4:
                     raise ParamParseError(f'{arg} is an invalid rating argument')
@@ -377,13 +442,21 @@ class SubFilter:
             else:
                 rest.append(arg)
 
-        self.types = self.types or ['CONTESTANT', 'OUT_OF_COMPETITION', 'VIRTUAL', 'PRACTICE']
+        self.types = self.types or [
+            'CONTESTANT',
+            'OUT_OF_COMPETITION',
+            'VIRTUAL',
+            'PRACTICE',
+        ]
         return rest
 
     @staticmethod
-    def filter_solved(submissions):
-        """Filters and keeps only solved submissions. If a problem is solved multiple times the first
-        accepted submission is kept. The unique id for a problem is (problem name, contest start time).
+    def filter_solved(submissions: list[cf.Submission]) -> list[cf.Submission]:
+        """Filters and keeps only solved submissions.
+
+        If a problem is solved multiple times the first accepted submission is
+        kept. The unique id for a problem is
+        (problem name, contest start time).
         """
         submissions.sort(key=lambda sub: sub.creationTimeSeconds)
         problems = set()
@@ -391,7 +464,7 @@ class SubFilter:
 
         for submission in submissions:
             problem = submission.problem
-            contest = cache2.contest_cache.contest_by_id.get(problem.contestId, None)
+            contest = cf_cache.contest_cache.contest_by_id.get(problem.contestId, None)
             if submission.verdict == 'OK':
                 # Assume (name, contest start time) is a unique identifier for problems
                 problem_key = (problem.name, contest.startTimeSeconds if contest else 0)
@@ -400,32 +473,58 @@ class SubFilter:
                     problems.add(problem_key)
         return solved_subs
 
-    def filter_subs(self, submissions):
+    def filter_subs(self, submissions: list[cf.Submission]) -> list[cf.Submission]:
         submissions = SubFilter.filter_solved(submissions)
         filtered_subs = []
         for submission in submissions:
             problem = submission.problem
-            contest = cache2.contest_cache.contest_by_id.get(problem.contestId, None)
+            contest = cf_cache.contest_cache.contest_by_id.get(problem.contestId, None)
             type_ok = submission.author.participantType in self.types
             date_ok = self.dlo <= submission.creationTimeSeconds < self.dhi
             tag_ok = problem.matches_all_tags(self.tags)
             bantag_ok = not problem.matches_any_tag(self.bantags)
-            index_ok = not self.indices or any(index.lower() == problem.index.lower() for index in self.indices)
-            contest_ok = not self.contests or (contest and contest.matches(self.contests))
+            index_ok = not self.indices or any(
+                index.lower() == problem.index.lower() for index in self.indices
+            )
+            contest_ok = not self.contests or (
+                contest and contest.matches(self.contests)
+            )
             team_ok = self.team or len(submission.author.members) == 1
             if self.rated:
-                problem_ok = contest and contest.id < cf.GYM_ID_THRESHOLD and not is_nonstandard_problem(problem)
+                problem_ok = (
+                    contest
+                    and contest.id < cf.GYM_ID_THRESHOLD
+                    and not is_nonstandard_problem(problem)
+                )
                 rating_ok = problem.rating and self.rlo <= problem.rating <= self.rhi
             else:
                 # acmsguru and gym allowed
-                problem_ok = (not contest or contest.id >= cf.GYM_ID_THRESHOLD
-                              or not is_nonstandard_problem(problem))
+                problem_ok = (
+                    not contest
+                    or contest.id >= cf.GYM_ID_THRESHOLD
+                    or not is_nonstandard_problem(problem)
+                )
                 rating_ok = True
-            if type_ok and date_ok and rating_ok and tag_ok and bantag_ok and team_ok and problem_ok and contest_ok and index_ok:
+            if (
+                type_ok
+                and date_ok
+                and rating_ok
+                and tag_ok
+                and bantag_ok
+                and team_ok
+                and problem_ok
+                and contest_ok
+                and index_ok
+            ):
                 filtered_subs.append(submission)
         return filtered_subs
 
-    def filter_rating_changes(self, rating_changes):
-        rating_changes = [change for change in rating_changes
-                    if self.dlo <= change.ratingUpdateTimeSeconds < self.dhi]
+    def filter_rating_changes(
+        self, rating_changes: list[cf.RatingChange]
+    ) -> list[cf.RatingChange]:
+        rating_changes = [
+            change
+            for change in rating_changes
+            if self.dlo <= change.ratingUpdateTimeSeconds < self.dhi
+        ]
         return rating_changes

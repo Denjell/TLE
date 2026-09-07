@@ -1,14 +1,15 @@
 import asyncio
-import logging
 import functools
+import logging
 import random
+from collections.abc import Callable
+from typing import Any
 
 import discord
 from discord.ext import commands
 
-from tle.util import codeforces_api as cf
-from tle.util import db
-from tle.util import tasks
+from tle import constants
+from tle.util import codeforces_api as cf, db, tasks
 
 logger = logging.getLogger(__name__)
 
@@ -18,64 +19,89 @@ _ALERT_AMBER = 0xFFBF00
 _BOT_PREFIX = ';'
 
 
-def embed_neutral(desc, color=None):
+def embed_neutral(desc: object, color: int | None = None) -> discord.Embed:
     return discord.Embed(description=str(desc), color=color)
 
 
-def embed_success(desc):
+def embed_success(desc: object) -> discord.Embed:
     return discord.Embed(description=str(desc), color=_SUCCESS_GREEN)
 
 
-def embed_alert(desc):
+def embed_alert(desc: object) -> discord.Embed:
     return discord.Embed(description=str(desc), color=_ALERT_AMBER)
 
 
-def random_cf_color():
+def random_cf_color() -> int:
     return random.choice(_CF_COLORS)
 
 
-def cf_color_embed(**kwargs):
+def cf_color_embed(**kwargs: Any) -> discord.Embed:
     return discord.Embed(**kwargs, color=random_cf_color())
 
 
-def set_same_cf_color(embeds):
+def set_same_cf_color(embeds: list[discord.Embed]) -> None:
     color = random_cf_color()
     for embed in embeds:
-        embed.color=color
+        embed.color = color
 
 
-def attach_image(embed, img_file):
+def attach_image(embed: discord.Embed, img_file: discord.File) -> None:
     embed.set_image(url=f'attachment://{img_file.filename}')
 
 
-def set_author_footer(embed, user):
-    embed.set_footer(text=f'Requested by {user}', icon_url=user.avatar)
+def set_author_footer(
+    embed: discord.Embed, user: discord.Member | discord.User
+) -> None:
+    embed.set_footer(text=f'Requested by {user}', icon_url=user.display_avatar.url)
 
 
-def send_error_if(*error_cls):
-    """Decorator for `cog_command_error` methods. Decorated methods send the error in an alert embed
-    when the error is an instance of one of the specified errors, otherwise the wrapped function is
+def get_role(guild: discord.Guild, role_identifier: str | int) -> discord.Role | None:
+    """Look up a role by name (str) or ID (int)."""
+    if isinstance(role_identifier, int):
+        return guild.get_role(role_identifier)
+    return discord.utils.get(guild.roles, name=role_identifier)
+
+
+def has_role(member: discord.Member, role_identifier: str | int) -> bool:
+    """Check if member has a role identified by name (str) or ID (int)."""
+    if isinstance(role_identifier, int):
+        return any(role.id == role_identifier for role in member.roles)
+    return any(role.name == role_identifier for role in member.roles)
+
+
+def send_error_if(*error_cls: type[Exception]) -> Callable[..., Any]:
+    """Decorator for `cog_command_error` methods.
+
+    Decorated methods send the error in an alert embed when the error is an
+    instance of one of the specified errors, otherwise the wrapped function is
     invoked.
     """
-    def decorator(func):
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        async def wrapper(cog, ctx, error):
+        async def wrapper(cog: Any, ctx: commands.Context, error: Exception) -> None:
             if isinstance(error, error_cls):
                 await ctx.send(embed=embed_alert(error))
                 error.handled = True
             else:
                 await func(cog, ctx, error)
+
         return wrapper
+
     return decorator
 
 
-async def bot_error_handler(ctx, exception):
+async def bot_error_handler(ctx: commands.Context, exception: Exception) -> None:
     if getattr(exception, 'handled', False):
         # Errors already handled in cogs should have .handled = True
         return
 
     if isinstance(exception, db.DatabaseDisabledError):
-        await ctx.send(embed=embed_alert('Sorry, the database is not available. Some features are disabled.'))
+        await ctx.send(
+            embed=embed_alert(
+                'Sorry, the database is not available. Some features are disabled.'
+            )
+        )
     elif isinstance(exception, commands.NoPrivateMessage):
         await ctx.send(embed=embed_alert('Commands are disabled in private channels'))
     elif isinstance(exception, commands.DisabledCommand):
@@ -86,18 +112,18 @@ async def bot_error_handler(ctx, exception):
         msg = 'Ignoring exception in command {}:'.format(ctx.command)
         exc_info = type(exception), exception, exception.__traceback__
         extra = {
-            "message_content": ctx.message.content,
-            "jump_url": ctx.message.jump_url
+            'message_content': ctx.message.content,
+            'jump_url': ctx.message.jump_url,
         }
         logger.exception(msg, exc_info=exc_info, extra=extra)
 
 
-def once(func):
-    """Decorator that wraps the given async function such that it is executed only once."""
+def once(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator that wraps a coroutine such that it is executed only once."""
     first = True
 
     @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: Any, **kwargs: Any) -> None:
         nonlocal first
         if first:
             first = False
@@ -106,58 +132,44 @@ def once(func):
     return wrapper
 
 
-def on_ready_event_once(bot):
-    """Decorator that uses bot.event to set the given function as the bot's on_ready event handler,
-    but does not execute it more than once.
-    """
-    def register_on_ready(func):
-        @bot.event
-        @once
-        async def on_ready():
-            await func()
-
-    return register_on_ready
-
-
-async def presence(bot):
-    await bot.change_presence(activity=discord.Activity(
-        type=discord.ActivityType.listening,
-        name='your commands'))
+async def presence(bot: Any) -> None:
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.listening, name='your commands'
+        )
+    )
     await asyncio.sleep(60)
 
-    @tasks.task(name='OrzUpdate',
-               waiter=tasks.Waiter.fixed_delay(5*60))
-    async def presence_task(_):
-        while True:
-            target = random.choice([
-                member for member in bot.get_all_members()
-                if 'Purgatory' not in {role.name for role in member.roles}
-            ])
-            await bot.change_presence(activity=discord.Game(
-                name=f'{target.display_name} orz'))
-            await asyncio.sleep(10 * 60)
+    @tasks.task(name='OrzUpdate', waiter=tasks.Waiter.fixed_delay(10 * 60))
+    async def presence_task(_: Any) -> None:
+        target = random.choice(
+            [
+                member
+                for member in bot.get_all_members()
+                if not has_role(member, constants.TLE_PURGATORY)
+            ]
+        )
+        await bot.change_presence(
+            activity=discord.Game(name=f'{target.display_name} orz')
+        )
 
     presence_task.start()
 
+
 class TleHelp(commands.DefaultHelpCommand):
-    def add_command_formatting(self, command):
-        """A utility function to format the non-indented block of commands and groups.
-
-        Parameters
-        ------------
-        command: :class:`Command`
-            The command to format.
+    def add_command_formatting(self, command: commands.Command[Any, ..., Any]) -> None:
+        """Format the non-indented block of commands and groups, showing the
+        bot's command prefix in the usage signature.
         """
-
         if command.description:
             self.paginator.add_line(command.description, empty=True)
 
         signature = _BOT_PREFIX + command.qualified_name
         if len(command.aliases) > 0:
             aliases = '|'.join(command.aliases)
-            signature += '|'+aliases
+            signature += '|' + aliases
         if command.usage:
-            signature += " "+command.usage
+            signature += ' ' + command.usage
         self.paginator.add_line(signature, empty=True)
 
         if command.help:
@@ -167,4 +179,3 @@ class TleHelp(commands.DefaultHelpCommand):
                 for line in command.help.splitlines():
                     self.paginator.add_line(line)
                 self.paginator.add_line()
-

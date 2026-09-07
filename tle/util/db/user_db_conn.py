@@ -1,13 +1,26 @@
-import sqlite3
-from enum import IntEnum
+# mypy: disable-error-code="no-any-return"
 from collections import namedtuple
+from collections.abc import Callable, Sequence
+from enum import IntEnum
+from typing import Any
 
+import aiosqlite
 from discord.ext import commands
 
+from tle import constants
 from tle.util import codeforces_api as cf
-from tle.util import codeforces_common as cf_common
 
 _DEFAULT_VC_RATING = 1500
+
+LockoutRound = namedtuple(
+    'LockoutRound',
+    'guild users rating points time problems status duration repeat times',
+)
+FinishedLockoutRound = namedtuple(
+    'FinishedLockoutRound',
+    'guild users rating points time problems status duration repeat times end_time',
+)
+
 
 class Gitgud(IntEnum):
     GOTGUD = 0
@@ -15,17 +28,6 @@ class Gitgud(IntEnum):
     NOGUD = 2
     FORCED_NOGUD = 3
 
-class Training(IntEnum):
-    NOTSTARTED = 0
-    ACTIVE = 1
-    COMPLETED = 2
-
-class TrainingProblemStatus(IntEnum):
-    SOLVED = 0
-    SOLVED_TOO_SLOW = 1
-    ACTIVE = 2
-    SKIPPED = 3
-    INVALIDATED = 4
 
 class Duel(IntEnum):
     PENDING = 0
@@ -36,16 +38,17 @@ class Duel(IntEnum):
     COMPLETE = 5
     INVALID = 6
 
+
 class Winner(IntEnum):
     DRAW = 0
     CHALLENGER = 1
     CHALLENGEE = 2
 
+
 class DuelType(IntEnum):
     UNOFFICIAL = 0
     OFFICIAL = 1
-    ADJUNOFFICIAL = 2
-    ADJOFFICIAL = 3
+
 
 class RatedVC(IntEnum):
     ONGOING = 0
@@ -61,7 +64,7 @@ class DatabaseDisabledError(UserDbError):
 
 
 class DummyUserDbConn:
-    def __getattribute__(self, item):
+    def __getattribute__(self, item: str) -> Any:
         raise DatabaseDisabledError
 
 
@@ -69,1240 +72,1810 @@ class UniqueConstraintFailed(UserDbError):
     pass
 
 
-def namedtuple_factory(cursor, row):
+def namedtuple_factory(cursor: Any, row: tuple[Any, ...]) -> Any:
     """Returns sqlite rows as named tuples."""
-    fields = [col[0] for col in cursor.description if col[0].isidentifier()]
-    Row = namedtuple("Row", fields)
+    fields = [col[0] for col in cursor.description]
+    for f in fields:
+        if not f.isidentifier():
+            raise ValueError(f'Column name {f!r} is not a valid identifier')
+    Row = namedtuple('Row', fields)  # type: ignore[misc]
     return Row(*row)
 
 
-class UserDbConn:
-    def __init__(self, dbfile):
-        self.conn = sqlite3.connect(dbfile)
-        self.conn.row_factory = namedtuple_factory
-        self.create_tables()
+# Allowlists for table/column names used in _insert_one/_insert_many
+_VALID_TABLES = frozenset(
+    {
+        'starboard_emoji_v1',
+        'starboard_config_v1',
+        'starboard_message_v1',
+    }
+)
+_VALID_COLUMNS = frozenset(
+    {
+        'guild_id',
+        'emoji',
+        'threshold',
+        'color',
+        'channel_id',
+        'original_msg_id',
+        'starboard_msg_id',
+    }
+)
 
-    def create_tables(self):
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS user_handle ('
-            'user_id     TEXT,'
-            'guild_id    TEXT,'
-            'handle      TEXT,'
-            'active      INTEGER,'
-            'PRIMARY KEY (user_id, guild_id)'
-            ')'
-        )
-        self.conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS ix_user_handle_guild_handle '
-                          'ON user_handle (guild_id, handle)')
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS cf_user_cache ('
-            'handle              TEXT PRIMARY KEY,'
-            'first_name          TEXT,'
-            'last_name           TEXT,'
-            'country             TEXT,'
-            'city                TEXT,'
-            'organization        TEXT,'
-            'contribution        INTEGER,'
-            'rating              INTEGER,'
-            'maxRating           INTEGER,'
-            'last_online_time    INTEGER,'
-            'registration_time   INTEGER,'
-            'friend_of_count     INTEGER,'
-            'title_photo         TEXT'
-            ')'
-        )
+
+class UserDbConn:
+    def __init__(self, dbfile: str) -> None:
+        self.db_file = dbfile
+        self._conn: aiosqlite.Connection | None = None
+
+    @property
+    def conn(self) -> aiosqlite.Connection:
+        assert self._conn is not None, 'Database not connected. Call connect() first.'
+        return self._conn
+
+    async def connect(self) -> None:
+        self._conn = await aiosqlite.connect(self.db_file)
+        await self._conn.execute('PRAGMA journal_mode=WAL')
+        await self._conn.execute('PRAGMA synchronous=NORMAL')
+        self._conn.row_factory = namedtuple_factory
+        await self.create_tables()
+
+    async def create_tables(self) -> None:
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_handle (
+                user_id     TEXT,
+                guild_id    TEXT,
+                handle      TEXT,
+                active      INTEGER,
+                PRIMARY KEY (user_id, guild_id)
+            )
+        """)
+        await self.conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+            ix_user_handle_guild_handle ON user_handle (guild_id, handle)
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS cf_user_cache (
+                handle              TEXT PRIMARY KEY,
+                first_name          TEXT,
+                last_name           TEXT,
+                country             TEXT,
+                city                TEXT,
+                organization        TEXT,
+                contribution        INTEGER,
+                rating              INTEGER,
+                maxRating           INTEGER,
+                last_online_time    INTEGER,
+                registration_time   INTEGER,
+                friend_of_count     INTEGER,
+                title_photo         TEXT
+            )
+        """)
         # TODO: Make duel tables guild-aware.
-        self.conn.execute('''
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS duelist(
-                "user_id"	INTEGER PRIMARY KEY NOT NULL,
-                "rating"	INTEGER NOT NULL,
-                "guild_id"  TEXT
+                "user_id"  INTEGER PRIMARY KEY NOT NULL,
+                "rating"   INTEGER NOT NULL,
+                "guild_id" TEXT
             )
-        ''')
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS duel(
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
-                "challenger"	INTEGER NOT NULL,
-                "challengee"	INTEGER NOT NULL,
-                "issue_time"	REAL NOT NULL,
-                "start_time"	REAL,
-                "finish_time"	REAL,
-                "problem_name"	TEXT,
-                "contest_id"	INTEGER,
-                "p_index"	INTEGER,
-                "status"	INTEGER,
-                "winner"	INTEGER,
-                "type"		INTEGER,
-                "guild_id"  TEXT
+                "id"           INTEGER PRIMARY KEY AUTOINCREMENT,
+                "challenger"   INTEGER NOT NULL,
+                "challengee"   INTEGER NOT NULL,
+                "issue_time"   REAL NOT NULL,
+                "start_time"   REAL,
+                "finish_time"  REAL,
+                "problem_name" TEXT,
+                "contest_id"   INTEGER,
+                "p_index"      INTEGER,
+                "status"       INTEGER,
+                "winner"       INTEGER,
+                "type"         INTEGER,
+                "guild_id"     TEXT
             )
-        ''')
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS duel_settings (
                 guild_id TEXT PRIMARY KEY,
                 channel_id TEXT
             )
-        ''')
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS "challenge" (
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
-                "user_id"	TEXT NOT NULL,
-                "issue_time"	REAL NOT NULL,
-                "finish_time"	REAL,
-                "problem_name"	TEXT NOT NULL,
-                "contest_id"	INTEGER NOT NULL,
-                "p_index"	INTEGER NOT NULL,
-                "rating_delta"	INTEGER NOT NULL,
-                "status"	INTEGER NOT NULL
+                "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                "user_id" TEXT NOT NULL,
+                "issue_time" REAL NOT NULL,
+                "finish_time" REAL,
+                "problem_name" TEXT NOT NULL,
+                "contest_id" INTEGER NOT NULL,
+                "p_index" INTEGER NOT NULL,
+                "rating_delta" INTEGER NOT NULL,
+                "status" INTEGER NOT NULL
             )
-        ''')
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS "user_challenge" (
-                "user_id"	TEXT,
-                "active_challenge_id"	INTEGER,
-                "issue_time"	REAL,
-                "score"	INTEGER NOT NULL,
-                "num_completed"	INTEGER NOT NULL,
-                "num_skipped"	INTEGER NOT NULL,
-                PRIMARY KEY("user_id")
+                "user_id" TEXT,
+                "active_challenge_id" INTEGER,
+                "issue_time" REAL,
+                "score" INTEGER NOT NULL,
+                "num_completed" INTEGER NOT NULL,
+                "num_skipped" INTEGER NOT NULL,
+                PRIMARY KEY ("user_id")
             )
-        ''')
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS reminder (
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS "reminder" (
                 guild_id TEXT PRIMARY KEY,
                 channel_id TEXT,
                 role_id TEXT,
                 before TEXT
             )
-        ''')
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS starboard ('
-            'guild_id     TEXT PRIMARY KEY,'
-            'channel_id   TEXT'
-            ')'
-        )
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS starboard_message ('
-            'original_msg_id    TEXT PRIMARY KEY,'
-            'starboard_msg_id   TEXT,'
-            'guild_id           TEXT'
-            ')'
-        )
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS rankup ('
-            'guild_id     TEXT PRIMARY KEY,'
-            'channel_id   TEXT'
-            ')'
-        )
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS auto_role_update ('
-            'guild_id     TEXT PRIMARY KEY'
-            ')'
-        )
-
-        # Rated VCs stuff:
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS "rated_vcs" (
-                "id"	         INTEGER PRIMARY KEY AUTOINCREMENT,
-                "contest_id"     INTEGER NOT NULL,
-                "start_time"     REAL,
-                "finish_time"    REAL,
-                "status"         INTEGER,
-                "guild_id"       TEXT
-            )
-        ''')
-
-        # TODO: Do we need to explicitly specify the fk constraint or just depend on the middleware?
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS "rated_vc_users" (
-                "vc_id"	         INTEGER,
-                "user_id"        TEXT NOT NULL,
-                "rating"         INTEGER,
-
-                CONSTRAINT fk_vc
-                    FOREIGN KEY (vc_id)
-                    REFERENCES rated_vcs(id),
-
-                PRIMARY KEY(vc_id, user_id)
-            )
-        ''')
-
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS rated_vc_settings (
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS rankup (
                 guild_id TEXT PRIMARY KEY,
                 channel_id TEXT
             )
-        ''')
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS auto_role_update (
+                guild_id TEXT PRIMARY KEY
+            )
+        """)
 
-        self.conn.execute('''
+        # Training stuff:
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS training_settings (
                 guild_id TEXT PRIMARY KEY,
                 channel_id TEXT
             )
-        ''')
-
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS trainings (
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
-                "user_id" TEXT,
-                "score" INTEGER,
-                "lives" INTEGER,
-                "time_left"     REAL,
-                "mode"  INTEGER NOT NULL,
-                "status" INTEGER NOT NULL
+                "id"         INTEGER PRIMARY KEY AUTOINCREMENT,
+                "user_id"    TEXT,
+                "score"      INTEGER,
+                "lives"      INTEGER,
+                "time_left"  REAL,
+                "mode"       INTEGER NOT NULL,
+                "status"     INTEGER NOT NULL
             )
-        ''')
-
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS training_problems (
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
+                "id"            INTEGER PRIMARY KEY AUTOINCREMENT,
                 "training_id"   INTEGER NOT NULL,
-                "issue_time"	REAL NOT NULL,
-                "finish_time"	REAL,
-                "problem_name"	TEXT NOT NULL,
-                "contest_id"	INTEGER NOT NULL,
-                "p_index"	INTEGER NOT NULL,
-                "rating"	INTEGER NOT NULL,
-                "status"	INTEGER NOT NULL
+                "issue_time"    REAL NOT NULL,
+                "finish_time"   REAL,
+                "problem_name"  TEXT NOT NULL,
+                "contest_id"    INTEGER NOT NULL,
+                "p_index"       INTEGER NOT NULL,
+                "rating"        INTEGER NOT NULL,
+                "status"        INTEGER NOT NULL
             )
-        ''')
+        """)
 
-        self.conn.execute('''
+        # Lockout stuff:
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS round_settings (
                 guild_id TEXT PRIMARY KEY,
                 channel_id TEXT
             )
-        ''')
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS lockout_ongoing_rounds (
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
-                "guild" TEXT,
-                "users" TEXT,
-                "rating" TEXT,
-                "points" TEXT,
-                "time" INT,
-                "problems" TEXT,
-                "status" TEXT,
-                "duration" INTEGER,
-                "repeat" INTEGER,
-                "times" TEXT
+                "id"        INTEGER PRIMARY KEY AUTOINCREMENT,
+                "guild"     TEXT,
+                "users"     TEXT,
+                "rating"    TEXT,
+                "points"    TEXT,
+                "time"      INT,
+                "problems"  TEXT,
+                "status"    TEXT,
+                "duration"  INTEGER,
+                "repeat"    INTEGER,
+                "times"     TEXT
             )
-        ''')
-
-        self.conn.execute('''
+        """)
+        await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS lockout_finished_rounds(
-                "id"	INTEGER PRIMARY KEY AUTOINCREMENT,
-                "guild" TEXT,
-                "users" TEXT,
-                "rating" TEXT,
-                "points" TEXT,
-                "time" INT,
-                "problems" TEXT,
-                "status" TEXT,
-                "duration" INTEGER,
-                "repeat" INTEGER,
-                "times" TEXT,
-                "end_time" INT
+                "id"        INTEGER PRIMARY KEY AUTOINCREMENT,
+                "guild"     TEXT,
+                "users"     TEXT,
+                "rating"    TEXT,
+                "points"    TEXT,
+                "time"      INT,
+                "problems"  TEXT,
+                "status"    TEXT,
+                "duration"  INTEGER,
+                "repeat"    INTEGER,
+                "times"     TEXT,
+                "end_time"  INT
             )
-            ''')
+        """)
+
+        # Rated VCs stuff:
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS "rated_vcs" (
+                "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                "contest_id" INTEGER NOT NULL,
+                "start_time" REAL,
+                "finish_time" REAL,
+                "status" INTEGER,
+                "guild_id" TEXT
+            )
+        """)
+
+        # TODO: Do we need to explicitly specify the fk constraint
+        #       or just depend on the middleware?
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS "rated_vc_users" (
+                "vc_id" INTEGER,
+                "user_id" TEXT NOT NULL,
+                "rating" INTEGER,
+
+                CONSTRAINT fk_vc
+                FOREIGN KEY (vc_id)
+                REFERENCES rated_vcs (id),
+
+                PRIMARY KEY (vc_id, user_id)
+            )
+        """)
+
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS rated_vc_settings (
+                guild_id TEXT PRIMARY KEY,
+                channel_id TEXT
+            )
+        """)
+
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS starboard_config_v1 (
+                guild_id TEXT,
+                emoji TEXT,
+                channel_id TEXT,
+                PRIMARY KEY (guild_id, emoji)
+            )
+        """)
+
+        # 1b) emoji holds threshold + color
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS starboard_emoji_v1 (
+                guild_id TEXT,
+                emoji TEXT,
+                threshold INTEGER,
+                color INTEGER,
+                PRIMARY KEY (guild_id, emoji)
+            )
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS starboard_message_v1 (
+                original_msg_id TEXT,
+                starboard_msg_id TEXT,
+                guild_id TEXT,
+                emoji TEXT,
+                PRIMARY KEY (original_msg_id, emoji)
+            )
+         """)
+
+        # === one-time migration from old tables ===
+        cursor = await self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='starboard'"
+        )
+        old_exists = bool(await cursor.fetchone())
+
+        cursor = await self.conn.execute(
+            'SELECT COUNT(*) AS cnt FROM starboard_config_v1'
+        )
+        row = await cursor.fetchone()
+        migrated = row.cnt > 0
+
+        if old_exists and not migrated:
+            cursor = await self.conn.execute(
+                'SELECT guild_id, channel_id FROM starboard'
+            )
+            for guild_id, channel_id in await cursor.fetchall():
+                await self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO starboard_config_v1 (
+                        guild_id, emoji, channel_id
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (guild_id, constants._DEFAULT_STAR, channel_id),
+                )
+                await self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO starboard_emoji_v1 (
+                        guild_id, emoji, threshold, color
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (guild_id, constants._DEFAULT_STAR, 5, constants._DEFAULT_COLOR),
+                )
+
+            # lift old messages
+            cursor = await self.conn.execute("""
+                SELECT
+                    original_msg_id,
+                    starboard_msg_id,
+                    guild_id
+                FROM starboard_message
+                """)
+            for orig, star, guild_id in await cursor.fetchall():
+                await self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO starboard_message_v1 (
+                        original_msg_id, starboard_msg_id, guild_id, emoji
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (orig, star, guild_id, constants._DEFAULT_STAR),
+                )
+            await self.conn.commit()
 
     # Helper functions.
 
-    def _insert_one(self, table: str, columns, values: tuple):
+    async def _insert_one(
+        self, table: str, columns: Sequence[str], values: tuple[Any, ...]
+    ) -> int:
+        if table not in _VALID_TABLES:
+            raise ValueError(f'Invalid table name: {table!r}')
+        for col in columns:
+            if col not in _VALID_COLUMNS:
+                raise ValueError(f'Invalid column name: {col!r}')
         n = len(values)
-        query = '''
+        query = """
             INSERT OR REPLACE INTO {} ({}) VALUES ({})
-        '''.format(table, ', '.join(columns), ', '.join(['?'] * n))
-        rc = self.conn.execute(query, values).rowcount
-        self.conn.commit()
+        """.format(table, ', '.join(columns), ', '.join(['?'] * n))
+        cursor = await self.conn.execute(query, values)
+        rc = cursor.rowcount
+        await self.conn.commit()
         return rc
 
-    def _insert_many(self, table: str, columns, values: list):
+    async def _insert_many(
+        self, table: str, columns: Sequence[str], values: list[tuple[Any, ...]]
+    ) -> int:
+        if table not in _VALID_TABLES:
+            raise ValueError(f'Invalid table name: {table!r}')
+        for col in columns:
+            if col not in _VALID_COLUMNS:
+                raise ValueError(f'Invalid column name: {col!r}')
         n = len(columns)
-        query = '''
+        query = """
             INSERT OR REPLACE INTO {} ({}) VALUES ({})
-        '''.format(table, ', '.join(columns), ', '.join(['?'] * n))
-        rc = self.conn.executemany(query, values).rowcount
-        self.conn.commit()
+        """.format(table, ', '.join(columns), ', '.join(['?'] * n))
+        cursor = await self.conn.executemany(query, values)
+        rc = cursor.rowcount
+        await self.conn.commit()
         return rc
 
-    def _fetchone(self, query: str, params=None, row_factory=None):
-        self.conn.row_factory = row_factory
-        res = self.conn.execute(query, params).fetchone()
-        self.conn.row_factory = None
-        return res
+    async def _fetchone(
+        self,
+        query: str,
+        params: tuple[Any, ...] | None = None,
+        row_factory: Callable[..., Any] | None = None,
+    ) -> Any:
+        cursor = await self.conn.execute(query, params or ())
+        if row_factory:
+            cursor.row_factory = row_factory
+        return await cursor.fetchone()
 
-    def _fetchall(self, query: str, params=None, row_factory=None):
-        self.conn.row_factory = row_factory
-        res = self.conn.execute(query, params).fetchall()
-        self.conn.row_factory = None
-        return res
+    async def _fetchall(
+        self,
+        query: str,
+        params: tuple[Any, ...] | None = None,
+        row_factory: Callable[..., Any] | None = None,
+    ) -> list[Any]:
+        cursor = await self.conn.execute(query, params or ())
+        if row_factory:
+            cursor.row_factory = row_factory
+        return await cursor.fetchall()
 
-    def new_challenge(self, user_id, issue_time, prob, delta):
-        query1 = '''
+    async def new_challenge(
+        self, user_id: int, issue_time: float, prob: Any, delta: int
+    ) -> int:
+        query1 = """
             INSERT INTO challenge
-            (user_id, issue_time, problem_name, contest_id, p_index, rating_delta, status)
+            (
+                user_id, issue_time, problem_name,
+                contest_id, p_index, rating_delta, status
+            )
             VALUES
             (?, ?, ?, ?, ?, ?, 1)
-        '''
-        query2 = '''
-            INSERT OR IGNORE INTO user_challenge (user_id, score, num_completed, num_skipped)
+        """
+        query2 = """
+            INSERT OR IGNORE INTO user_challenge (
+                user_id, score, num_completed, num_skipped
+            )
             VALUES (?, 0, 0, 0)
-        '''
-        query3 = '''
+        """
+        query3 = """
             UPDATE user_challenge SET active_challenge_id = ?, issue_time = ?
             WHERE user_id = ? AND active_challenge_id IS NULL
-        '''
-        cur = self.conn.cursor()
-        cur.execute(query1, (user_id, issue_time, prob.name, prob.contestId, prob.index, delta))
-        last_id, rc = cur.lastrowid, cur.rowcount
+        """
+        cursor = await self.conn.execute(
+            query1, (user_id, issue_time, prob.name, prob.contestId, prob.index, delta)
+        )
+        last_id, rc = cursor.lastrowid, cursor.rowcount
         if rc != 1:
-            self.conn.rollback()
+            await self.conn.rollback()
             return 0
-        cur.execute(query2, (user_id,))
-        cur.execute(query3, (last_id, issue_time, user_id))
-        if cur.rowcount != 1:
-            self.conn.rollback()
+        await self.conn.execute(query2, (user_id,))
+        cursor = await self.conn.execute(query3, (last_id, issue_time, user_id))
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
             return 0
-        self.conn.commit()
+        await self.conn.commit()
         return 1
 
-    def check_challenge(self, user_id):
-        query1 = '''
-            SELECT active_challenge_id, issue_time FROM user_challenge
+    async def check_challenge(self, user_id: int) -> Any:
+        query1 = """
+            SELECT
+                active_challenge_id,
+                issue_time
+            FROM user_challenge
             WHERE user_id = ?
-        '''
-        res = self.conn.execute(query1, (user_id,)).fetchone()
-        if res is None: return None
+        """
+        cursor = await self.conn.execute(query1, (user_id,))
+        res = await cursor.fetchone()
+        if res is None:
+            return None
         c_id, issue_time = res
-        query2 = '''
-            SELECT problem_name, contest_id, p_index, rating_delta FROM challenge
+        query2 = """
+            SELECT
+                problem_name,
+                contest_id,
+                p_index,
+                rating_delta
+            FROM challenge
             WHERE id = ?
-        '''
-        res = self.conn.execute(query2, (c_id,)).fetchone()
-        if res is None: return None
+        """
+        cursor = await self.conn.execute(query2, (c_id,))
+        res = await cursor.fetchone()
+        if res is None:
+            return None
         return c_id, issue_time, res[0], res[1], res[2], res[3]
 
-    def get_gudgitters_last(self, timestamp):
-        query = '''
-            SELECT user_id, rating_delta FROM challenge WHERE finish_time >= ? ORDER BY user_id
-        '''
-        return self.conn.execute(query, (timestamp,)).fetchall()
+    async def get_gudgitters_last(self, timestamp: float) -> list[Any]:
+        query = """
+            SELECT user_id, rating_delta FROM challenge
+            WHERE finish_time >= ? ORDER BY user_id
+        """
+        cursor = await self.conn.execute(query, (timestamp,))
+        return await cursor.fetchall()
 
-    def get_gudgitters_timerange(self, timestampStart, timestampEnd):
-        query = '''
-            SELECT user_id, rating_delta, issue_time FROM challenge WHERE finish_time >= ? AND finish_time <= ? ORDER BY user_id
-        '''
-        return self.conn.execute(query, (timestampStart,timestampEnd)).fetchall()
+    async def get_gudgitters_timerange(
+        self, timestamp_start: float, timestamp_end: float
+    ) -> list[Any]:
+        query = """
+            SELECT user_id, rating_delta, issue_time FROM challenge
+            WHERE finish_time >= ? AND finish_time <= ? ORDER BY user_id
+        """
+        cursor = await self.conn.execute(query, (timestamp_start, timestamp_end))
+        return await cursor.fetchall()
 
-    def get_gudgitters(self):
-        query = '''
-            SELECT user_id, score FROM user_challenge
-        '''
-        return self.conn.execute(query).fetchall()
+    async def get_gudgitters(self) -> list[Any]:
+        query = """
+            SELECT
+                user_id,
+                score
+            FROM user_challenge
+        """
+        cursor = await self.conn.execute(query)
+        return await cursor.fetchall()
 
-    def howgud(self, user_id):
-        query = '''
-            SELECT rating_delta FROM challenge WHERE user_id = ? AND finish_time IS NOT NULL
-        '''
-        return self.conn.execute(query, (user_id,)).fetchall()
+    async def howgud(self, user_id: int) -> list[Any]:
+        query = """
+            SELECT rating_delta FROM challenge
+            WHERE user_id = ? AND finish_time IS NOT NULL
+        """
+        cursor = await self.conn.execute(query, (user_id,))
+        return await cursor.fetchall()
 
-    def get_noguds(self, user_id):
-        query = ('SELECT problem_name '
-                 'FROM challenge '
-                 f'WHERE user_id = ? AND status = {Gitgud.NOGUD}')
-        return {name for name, in self.conn.execute(query, (user_id,)).fetchall()}
+    async def get_noguds(self, user_id: int) -> set[str]:
+        query = """
+            SELECT problem_name FROM challenge
+            WHERE user_id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(query, (user_id, Gitgud.NOGUD))
+        return {name for (name,) in await cursor.fetchall()}
 
-    def gitlog(self, user_id):
-        query = f'''
-            SELECT issue_time, finish_time, problem_name, contest_id, p_index, rating_delta, status
-            FROM challenge WHERE user_id = ? AND status != {Gitgud.FORCED_NOGUD} ORDER BY issue_time DESC
-        '''
-        return self.conn.execute(query, (user_id,)).fetchall()
+    async def gitlog(self, user_id: int) -> list[Any]:
+        query = """
+            SELECT
+                issue_time,
+                finish_time,
+                problem_name,
+                contest_id,
+                p_index,
+                rating_delta,
+                status
+            FROM challenge
+            WHERE user_id = ? AND status != ?
+            ORDER BY issue_time DESC
+        """
+        cursor = await self.conn.execute(query, (user_id, Gitgud.FORCED_NOGUD))
+        return await cursor.fetchall()
 
-    def complete_challenge(self, user_id, challenge_id, finish_time, delta):
-        query1 = f'''
-            UPDATE challenge SET finish_time = ?, status = {Gitgud.GOTGUD}
-            WHERE id = ? AND status = {Gitgud.GITGUD}
-        '''
-        query2 = '''
-            UPDATE user_challenge SET score = score + ?, num_completed = num_completed + 1,
-            active_challenge_id = NULL, issue_time = NULL
+    async def complete_challenge(
+        self, user_id: int, challenge_id: int, finish_time: float, delta: int
+    ) -> int:
+        query1 = """
+            UPDATE challenge SET finish_time = ?, status = ?
+            WHERE id = ? AND status = ?
+        """
+        query2 = """
+            UPDATE user_challenge SET
+                score = score + ?, num_completed = num_completed + 1,
+                active_challenge_id = NULL, issue_time = NULL
             WHERE user_id = ? AND active_challenge_id = ?
-        '''
-        rc = self.conn.execute(query1, (finish_time, challenge_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
+        """
+        cursor = await self.conn.execute(
+            query1, (finish_time, Gitgud.GOTGUD, challenge_id, Gitgud.GITGUD)
+        )
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
             return 0
-        rc = self.conn.execute(query2, (delta, user_id, challenge_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
+        cursor = await self.conn.execute(query2, (delta, user_id, challenge_id))
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
             return 0
-        self.conn.commit()
+        await self.conn.commit()
         return 1
 
-    def skip_challenge(self, user_id, challenge_id, status):
-        query1 = '''
+    async def skip_challenge(self, user_id: int, challenge_id: int, status: int) -> int:
+        query1 = """
             UPDATE user_challenge SET active_challenge_id = NULL, issue_time = NULL
             WHERE user_id = ? AND active_challenge_id = ?
-        '''
-        query2 = f'''
-            UPDATE challenge SET status = ? WHERE id = ? AND status = {Gitgud.GITGUD}
-        '''
-        rc = self.conn.execute(query1, (user_id, challenge_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
+        """
+        query2 = """
+            UPDATE challenge
+            SET status = ?
+            WHERE id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(query1, (user_id, challenge_id))
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
             return 0
-        rc = self.conn.execute(query2, (status, challenge_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
+        cursor = await self.conn.execute(query2, (status, challenge_id, Gitgud.GITGUD))
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
             return 0
-        self.conn.commit()
+        await self.conn.commit()
         return 1
 
-    def cache_cf_user(self, user):
-        query = ('INSERT OR REPLACE INTO cf_user_cache '
-                 '(handle, first_name, last_name, country, city, organization, contribution, '
-                 '    rating, maxRating, last_online_time, registration_time, friend_of_count, title_photo) '
-                 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        with self.conn:
-            return self.conn.execute(query, user).rowcount
+    async def cache_cf_user(self, user: Any) -> int:
+        query = """
+            INSERT OR REPLACE INTO cf_user_cache
+            (
+                handle, first_name, last_name, country, city, organization,
+                contribution,rating, maxRating, last_online_time,
+                registration_time, friend_of_count, title_photo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        cursor = await self.conn.execute(query, user)
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def fetch_cf_user(self, handle):
-        query = ('SELECT handle, first_name, last_name, country, city, organization, contribution, '
-                 '    rating, maxRating, last_online_time, registration_time, friend_of_count, title_photo '
-                 'FROM cf_user_cache '
-                 'WHERE UPPER(handle) = UPPER(?)')
-        user = self.conn.execute(query, (handle,)).fetchone()
-        return cf_common.fix_urls(cf.User._make(user)) if user else None
+    async def fetch_cf_user(self, handle: str) -> Any:
+        query = """
+            SELECT
+                handle, first_name, last_name, country, city, organization,
+                contribution, rating, maxRating, last_online_time,
+                registration_time, friend_of_count, title_photo
+            FROM cf_user_cache
+            WHERE UPPER(handle) = UPPER(?)
+        """
+        cursor = await self.conn.execute(query, (handle,))
+        user = await cursor.fetchone()
+        return cf.fix_urls(cf.User._make(user)) if user else None
 
-    def set_handle(self, user_id, guild_id, handle):
-        query = ('SELECT user_id '
-                 'FROM user_handle '
-                 'WHERE guild_id = ? AND handle = ?')
-        existing = self.conn.execute(query, (guild_id, handle)).fetchone()
+    async def set_handle(self, user_id: int, guild_id: int, handle: str) -> int:
+        query = """
+            SELECT user_id FROM user_handle
+            WHERE guild_id = ? AND handle = ?
+        """
+        cursor = await self.conn.execute(query, (guild_id, handle))
+        existing = await cursor.fetchone()
         if existing and int(existing[0]) != user_id:
             raise UniqueConstraintFailed
 
-        query = ('INSERT OR REPLACE INTO user_handle '
-                 '(user_id, guild_id, handle, active) '
-                 'VALUES (?, ?, ?, 1)')
-        with self.conn:
-            return self.conn.execute(query, (user_id, guild_id, handle)).rowcount
+        query = """
+            INSERT OR REPLACE INTO user_handle (user_id, guild_id, handle, active)
+            VALUES (?, ?, ?, 1)
+        """
+        cursor = await self.conn.execute(query, (user_id, guild_id, handle))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def set_inactive(self, guild_id_user_id_pairs):
-        query = ('UPDATE user_handle '
-                 'SET active = 0 '
-                 'WHERE guild_id = ? AND user_id = ?')
-        with self.conn:
-            return self.conn.executemany(query, guild_id_user_id_pairs).rowcount
+    async def set_inactive(self, guild_id_user_id_pairs: list[tuple[str, str]]) -> int:
+        query = """
+            UPDATE user_handle SET active = 0
+            WHERE guild_id = ? AND user_id = ?
+        """
+        cursor = await self.conn.executemany(query, guild_id_user_id_pairs)
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def get_handle(self, user_id, guild_id):
-        query = ('SELECT handle '
-                 'FROM user_handle '
-                 'WHERE user_id = ? AND guild_id = ?')
-        res = self.conn.execute(query, (user_id, guild_id)).fetchone()
+    async def get_handle(self, user_id: int, guild_id: int) -> str | None:
+        query = """
+            SELECT handle FROM user_handle
+            WHERE user_id = ? AND guild_id = ?
+        """
+        cursor = await self.conn.execute(query, (user_id, guild_id))
+        res = await cursor.fetchone()
         return res[0] if res else None
 
-    def get_user_id(self, handle, guild_id):
-        query = ('SELECT user_id '
-                 'FROM user_handle '
-                 'WHERE UPPER(handle) = UPPER(?) AND guild_id = ?')
-        res = self.conn.execute(query, (handle, guild_id)).fetchone()
+    async def get_user_id(self, handle: str, guild_id: int) -> int | None:
+        query = """
+            SELECT user_id FROM user_handle
+            WHERE UPPER(handle) = UPPER(?) AND guild_id = ?
+        """
+        cursor = await self.conn.execute(query, (handle, guild_id))
+        res = await cursor.fetchone()
         return int(res[0]) if res else None
 
-    def remove_handle(self, handle, guild_id):
-        query = ('DELETE FROM user_handle '
-                 'WHERE UPPER(handle) = UPPER(?) AND guild_id = ?')
-        with self.conn:
-            return self.conn.execute(query, (handle, guild_id)).rowcount
+    async def remove_handle(self, handle: str, guild_id: int) -> int:
+        query = """
+            DELETE FROM user_handle
+            WHERE UPPER(handle) = UPPER(?) AND guild_id = ?
+        """
+        cursor = await self.conn.execute(query, (handle, guild_id))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def get_handles_for_guild(self, guild_id):
-        query = ('SELECT user_id, handle '
-                 'FROM user_handle '
-                 'WHERE guild_id = ? AND active = 1')
-        res = self.conn.execute(query, (guild_id,)).fetchall()
+    async def get_handles_for_guild(self, guild_id: int) -> list[tuple[int, str]]:
+        query = """
+            SELECT
+                user_id,
+                handle
+            FROM user_handle
+            WHERE guild_id = ? AND active = 1
+        """
+        cursor = await self.conn.execute(query, (guild_id,))
+        res = await cursor.fetchall()
         return [(int(user_id), handle) for user_id, handle in res]
 
-    def get_cf_users_for_guild(self, guild_id):
-        query = ('SELECT u.user_id, c.handle, c.first_name, c.last_name, c.country, c.city, '
-                 '    c.organization, c.contribution, c.rating, c.maxRating, c.last_online_time, '
-                 '    c.registration_time, c.friend_of_count, c.title_photo '
-                 'FROM user_handle AS u '
-                 'LEFT JOIN cf_user_cache AS c '
-                 'ON u.handle = c.handle '
-                 'WHERE u.guild_id = ? AND u.active = 1')
-        res = self.conn.execute(query, (guild_id,)).fetchall()
+    async def get_cf_users_for_guild(self, guild_id: int) -> list[Any]:
+        query = """
+            SELECT
+                u.user_id, c.handle, c.first_name, c.last_name, c.country,
+                c.city, c.organization, c.contribution, c.rating, c.maxRating,
+                c.last_online_time, c.registration_time, c.friend_of_count,
+                c.title_photo
+            FROM user_handle AS u
+            LEFT JOIN cf_user_cache AS c
+            ON u.handle = c.handle
+            WHERE u.guild_id = ? AND u.active = 1
+        """
+        cursor = await self.conn.execute(query, (guild_id,))
+        res = await cursor.fetchall()
         return [(int(t[0]), cf.User._make(t[1:])) for t in res]
 
-    def get_reminder_settings(self, guild_id):
-        query = '''
+    async def get_reminder_settings(self, guild_id: int) -> Any:
+        query = """
             SELECT channel_id, role_id, before
             FROM reminder
             WHERE guild_id = ?
-        '''
-        return self.conn.execute(query, (guild_id,)).fetchone()
+        """
+        cursor = await self.conn.execute(query, (guild_id,))
+        return await cursor.fetchone()
 
-    def set_reminder_settings(self, guild_id, channel_id, role_id, before):
-        query = '''
+    async def set_reminder_settings(
+        self, guild_id: int, channel_id: int, role_id: int, before: str
+    ) -> None:
+        query = """
             INSERT OR REPLACE INTO reminder (guild_id, channel_id, role_id, before)
             VALUES (?, ?, ?, ?)
-        '''
-        self.conn.execute(query, (guild_id, channel_id, role_id, before))
-        self.conn.commit()
+        """
+        await self.conn.execute(query, (guild_id, channel_id, role_id, before))
+        await self.conn.commit()
 
-    def clear_reminder_settings(self, guild_id):
-        query = '''DELETE FROM reminder WHERE guild_id = ?'''
-        self.conn.execute(query, (guild_id,))
-        self.conn.commit()
+    async def clear_reminder_settings(self, guild_id: int) -> None:
+        query = """
+            DELETE FROM reminder WHERE guild_id = ?
+        """
+        await self.conn.execute(query, (guild_id,))
+        await self.conn.commit()
 
-    def get_starboard(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM starboard '
-                 'WHERE guild_id = ?')
-        return self.conn.execute(query, (guild_id,)).fetchone()
+    async def get_starboard_entry(
+        self, guild_id: str, emoji: str
+    ) -> tuple[int, int, int] | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT channel_id
+            FROM starboard_config_v1 WHERE guild_id=? AND emoji=?
+            """,
+            (guild_id, emoji),
+        )
+        cfg = await cursor.fetchone()
+        if not cfg:
+            return None
+        cursor = await self.conn.execute(
+            """
+            SELECT threshold, color
+            FROM starboard_emoji_v1 WHERE guild_id=? AND emoji=?
+            """,
+            (guild_id, emoji),
+        )
+        emo = await cursor.fetchone()
+        return (int(cfg[0]), int(emo[0]), int(emo[1]))
 
-    def set_starboard(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO starboard '
-                 '(guild_id, channel_id) '
-                 'VALUES (?, ?)')
-        self.conn.execute(query, (guild_id, channel_id))
-        self.conn.commit()
+    async def add_starboard_emoji(
+        self, guild_id: str, emoji: str, threshold: int, color: int
+    ) -> int:
+        return await self._insert_one(
+            'starboard_emoji_v1',
+            ('guild_id', 'emoji', 'threshold', 'color'),
+            (guild_id, emoji, threshold, color),
+        )
 
-    def clear_starboard(self, guild_id):
-        query = ('DELETE FROM starboard '
-                 'WHERE guild_id = ?')
-        self.conn.execute(query, (guild_id,))
-        self.conn.commit()
+    async def remove_starboard_emoji(self, guild_id: str, emoji: str) -> int:
+        cursor = await self.conn.execute(
+            """
+            DELETE FROM starboard_emoji_v1
+            WHERE guild_id = ? AND emoji = ?
+            """,
+            (guild_id, emoji),
+        )
+        rc = cursor.rowcount
+        await self.conn.commit()
+        return rc
 
-    def add_starboard_message(self, original_msg_id, starboard_msg_id, guild_id):
-        query = ('INSERT INTO starboard_message '
-                 '(original_msg_id, starboard_msg_id, guild_id) '
-                 'VALUES (?, ?, ?)')
-        self.conn.execute(query, (original_msg_id, starboard_msg_id, guild_id))
-        self.conn.commit()
+    async def update_starboard_threshold(
+        self, guild_id: str, emoji: str, threshold: int
+    ) -> int:
+        cursor = await self.conn.execute(
+            """
+            UPDATE starboard_emoji_v1
+            SET threshold=?
+            WHERE guild_id=? AND emoji=?
+            """,
+            (threshold, guild_id, emoji),
+        )
+        rc = cursor.rowcount
+        await self.conn.commit()
+        return rc
 
-    def check_exists_starboard_message(self, original_msg_id):
-        query = ('SELECT 1 '
-                 'FROM starboard_message '
-                 'WHERE original_msg_id = ?')
-        res = self.conn.execute(query, (original_msg_id,)).fetchone()
-        return res is not None
+    async def update_starboard_color(
+        self, guild_id: str, emoji: str, color: int
+    ) -> int:
+        cursor = await self.conn.execute(
+            """
+            UPDATE starboard_emoji_v1
+            SET color=?
+            WHERE guild_id=? AND emoji=?
+            """,
+            (color, guild_id, emoji),
+        )
+        rc = cursor.rowcount
+        await self.conn.commit()
+        return rc
 
-    def remove_starboard_message(self, *, original_msg_id=None, starboard_msg_id=None):
-        assert (original_msg_id is None) ^ (starboard_msg_id is None)
-        if original_msg_id is not None:
-            query = ('DELETE FROM starboard_message '
-                     'WHERE original_msg_id = ?')
-            rc = self.conn.execute(query, (original_msg_id,)).rowcount
+    async def set_starboard_channel(
+        self, guild_id: str, emoji: str, channel_id: str
+    ) -> int:
+        return await self._insert_one(
+            'starboard_config_v1',
+            ('guild_id', 'emoji', 'channel_id'),
+            (guild_id, emoji, channel_id),
+        )
+
+    async def clear_starboard_channel(self, guild_id: str, emoji: str) -> int:
+        cursor = await self.conn.execute(
+            """
+            DELETE FROM starboard_config_v1
+            WHERE guild_id = ? AND emoji = ?
+            """,
+            (guild_id, emoji),
+        )
+        rc = cursor.rowcount
+        await self.conn.commit()
+        return rc
+
+    async def add_starboard_message(
+        self,
+        original_msg_id: str,
+        starboard_msg_id: str,
+        guild_id: str,
+        emoji: str,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO
+                starboard_message_v1
+                (original_msg_id, starboard_msg_id, guild_id, emoji)
+            VALUES (?,?,?,?)
+            """,
+            (original_msg_id, starboard_msg_id, guild_id, emoji),
+        )
+        await self.conn.commit()
+
+    async def check_exists_starboard_message(
+        self, original_msg_id: str, emoji: str
+    ) -> bool:
+        cursor = await self.conn.execute(
+            """
+            SELECT 1 AS x
+            FROM starboard_message_v1
+            WHERE original_msg_id = ? AND emoji = ?
+            """,
+            (original_msg_id, emoji),
+        )
+        row = await cursor.fetchone()
+        return bool(row)
+
+    async def remove_starboard_message(
+        self,
+        *,
+        original_msg_id: str | None = None,
+        emoji: str | None = None,
+        starboard_msg_id: str | None = None,
+    ) -> int:
+        if original_msg_id is not None and emoji is not None:
+            cursor = await self.conn.execute(
+                """
+                DELETE FROM starboard_message_v1
+                WHERE original_msg_id = ? AND emoji = ?
+                """,
+                (original_msg_id, emoji),
+            )
+            rc = cursor.rowcount
+        elif starboard_msg_id is not None:
+            cursor = await self.conn.execute(
+                """
+                DELETE FROM starboard_message_v1
+                WHERE starboard_msg_id = ?
+                """,
+                (starboard_msg_id,),
+            )
+            rc = cursor.rowcount
         else:
-            query = ('DELETE FROM starboard_message '
-                     'WHERE starboard_msg_id = ?')
-            rc = self.conn.execute(query, (starboard_msg_id,)).rowcount
-        self.conn.commit()
+            rc = 0
+        await self.conn.commit()
         return rc
 
-    def clear_starboard_messages_for_guild(self, guild_id):
-        query = ('DELETE FROM starboard_message '
-                 'WHERE guild_id = ?')
-        rc = self.conn.execute(query, (guild_id,)).rowcount
-        self.conn.commit()
-        return rc
+    async def set_duel_channel(self, guild_id: int, channel_id: int) -> None:
+        query = """
+            INSERT OR REPLACE INTO duel_settings (guild_id, channel_id)
+            VALUES (?, ?)
+        """
+        await self.conn.execute(query, (guild_id, channel_id))
+        await self.conn.commit()
 
-    def set_duel_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO duel_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+    async def get_duel_channel(self, guild_id: int) -> int | None:
+        query = 'SELECT channel_id FROM duel_settings WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        row = await cursor.fetchone()
+        return int(row[0]) if row else None
 
-    def get_duel_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM duel_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
-
-    def check_duel_challenge(self, userid, guild_id):
-        query = f'''
+    async def check_duel_challenge(self, userid: int, guild_id: int) -> Any:
+        query = """
             SELECT id FROM duel
-            WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND (status == {Duel.ONGOING} OR status == {Duel.PENDING})
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()
+            WHERE
+                (challengee = ? OR challenger = ?)
+                AND guild_id = ?
+                AND (status == ? OR status == ?)
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.ONGOING, Duel.PENDING)
+        )
+        return await cursor.fetchone()
 
-    def check_duel_accept(self, challengee, guild_id):
-        query = f'''
+    async def check_duel_accept(self, challengee: int, guild_id: int) -> Any:
+        query = """
             SELECT id, challenger, problem_name FROM duel
-            WHERE challengee = ? AND guild_id = ? AND status == {Duel.PENDING}
-        '''
-        return self.conn.execute(query, (challengee,guild_id)).fetchone()
+            WHERE challengee = ? AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(query, (challengee, guild_id, Duel.PENDING))
+        return await cursor.fetchone()
 
-    def check_duel_decline(self, challengee, guild_id):
-        query = f'''
+    async def check_duel_decline(self, challengee: int, guild_id: int) -> Any:
+        query = """
             SELECT id, challenger FROM duel
-            WHERE challengee = ? AND guild_id = ? AND status == {Duel.PENDING}
-        '''
-        return self.conn.execute(query, (challengee,guild_id)).fetchone()
+            WHERE challengee = ? AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(query, (challengee, guild_id, Duel.PENDING))
+        return await cursor.fetchone()
 
-    def check_duel_withdraw(self, challenger, guild_id):
-        query = f'''
+    async def check_duel_withdraw(self, challenger: int, guild_id: int) -> Any:
+        query = """
             SELECT id, challengee FROM duel
-            WHERE challenger = ? AND guild_id = ? AND status == {Duel.PENDING}
-        '''
-        return self.conn.execute(query, (challenger,guild_id)).fetchone()
+            WHERE challenger = ? AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(query, (challenger, guild_id, Duel.PENDING))
+        return await cursor.fetchone()
 
-    def check_duel_draw(self, userid, guild_id):
-        query = f'''
+    async def check_duel_draw(self, userid: int, guild_id: int) -> Any:
+        query = """
             SELECT id, challenger, challengee, start_time, type FROM duel
-            WHERE (challenger = ? OR challengee = ?) AND guild_id = ? AND status == {Duel.ONGOING}
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()
+            WHERE (challenger = ? OR challengee = ?) AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.ONGOING)
+        )
+        return await cursor.fetchone()
 
-    def check_duel_giveup(self, userid, guild_id):
-        query = f'''
-            SELECT id, challenger, challengee, start_time, problem_name, contest_id, p_index, type FROM duel
-            WHERE (challenger = ? OR challengee = ?) AND guild_id = ? AND status == {Duel.ONGOING}
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()
+    async def check_duel_giveup(self, userid: int, guild_id: int) -> Any:
+        query = """
+            SELECT
+                id, challenger, challengee, start_time, problem_name,
+                contest_id, p_index, type FROM duel
+            WHERE (challenger = ? OR challengee = ?) AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.ONGOING)
+        )
+        return await cursor.fetchone()
 
+    async def check_duel_complete(self, userid: int, guild_id: int) -> Any:
+        query = """
+            SELECT
+                id, challenger, challengee, start_time, problem_name,
+                contest_id, p_index, type FROM duel
+            WHERE (challenger = ? OR challengee = ?) AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.ONGOING)
+        )
+        return await cursor.fetchone()
 
-    def check_duel_complete(self, userid, guild_id):
-        query = f'''
-            SELECT id, challenger, challengee, start_time, problem_name, contest_id, p_index, type FROM duel
-            WHERE (challenger = ? OR challengee = ?) AND guild_id = ? AND status == {Duel.ONGOING}
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()
-
-    def create_duel(self, challenger, challengee, issue_time, prob, dtype, guild_id):
-        query = f'''
-            INSERT INTO duel (challenger, challengee, issue_time, problem_name, contest_id, p_index, status, type, guild_id) VALUES (?, ?, ?, ?, ?, ?, {Duel.PENDING}, ?, ?)
-        '''
-        duelid = self.conn.execute(query, (challenger, challengee, issue_time, prob.name, prob.contestId, prob.index, dtype, guild_id)).lastrowid
-        self.conn.commit()
+    async def create_duel(
+        self,
+        challenger: int,
+        challengee: int,
+        issue_time: float,
+        prob: Any,
+        dtype: int,
+        guild_id: int,
+    ) -> int | None:
+        query = """
+            INSERT INTO duel (
+                challenger, challengee, issue_time, problem_name, contest_id,
+                p_index, status, type, guild_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        cursor = await self.conn.execute(
+            query,
+            (
+                challenger,
+                challengee,
+                issue_time,
+                prob.name,
+                prob.contestId,
+                prob.index,
+                Duel.PENDING,
+                dtype,
+                guild_id,
+            ),
+        )
+        duelid = cursor.lastrowid
+        await self.conn.commit()
         return duelid
 
-    def cancel_duel(self, duelid, guild_id, status):
-        query = f'''
-            UPDATE duel SET status = ? WHERE id = ? AND guild_id = ? AND status = {Duel.PENDING}
-        '''
-        rc = self.conn.execute(query, (status, duelid, guild_id)).rowcount
+    async def cancel_duel(self, duelid: int, guild_id: int, status: int) -> int:
+        query = """
+            UPDATE duel SET status = ? WHERE id = ? AND guild_id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(
+            query, (status, duelid, guild_id, Duel.PENDING)
+        )
+        rc = cursor.rowcount
         if rc != 1:
-            self.conn.rollback()
+            await self.conn.rollback()
             return 0
-        self.conn.commit()
+        await self.conn.commit()
         return rc
 
-    def invalidate_duel(self, duelid, guild_id):
-        query = f'''
-            UPDATE duel SET status = {Duel.INVALID} WHERE id = ? AND guild_id = ? AND status = {Duel.ONGOING}
-        '''
-        rc = self.conn.execute(query, (duelid,guild_id)).rowcount
+    async def invalidate_duel(self, duelid: int, guild_id: int) -> int:
+        query = """
+            UPDATE duel SET status = ?
+            WHERE id = ? AND guild_id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(
+            query, (Duel.INVALID, duelid, guild_id, Duel.ONGOING)
+        )
+        rc = cursor.rowcount
         if rc != 1:
-            self.conn.rollback()
+            await self.conn.rollback()
             return 0
-        self.conn.commit()
+        await self.conn.commit()
         return rc
 
-    def start_duel(self, duelid, guild_id, start_time):
-        query = f'''
-            UPDATE duel SET start_time = ?, status = {Duel.ONGOING}
-            WHERE id = ? AND guild_id = ? AND status = {Duel.PENDING}
-        '''
-        rc = self.conn.execute(query, (start_time, duelid, guild_id)).rowcount
+    async def start_duel(self, duelid: int, guild_id: int, start_time: float) -> int:
+        query = """
+            UPDATE duel SET start_time = ?, status = ?
+            WHERE id = ? AND guild_id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(
+            query, (start_time, Duel.ONGOING, duelid, guild_id, Duel.PENDING)
+        )
+        rc = cursor.rowcount
         if rc != 1:
-            self.conn.rollback()
+            await self.conn.rollback()
             return 0
-        self.conn.commit()
+        await self.conn.commit()
         return rc
 
-    def complete_duel(self, duelid, guild_id, winner, finish_time, winner_id = -1, loser_id = -1, delta = 0, dtype = DuelType.OFFICIAL):
-        query = f'''
-            UPDATE duel SET status = {Duel.COMPLETE}, finish_time = ?, winner = ? WHERE id = ? AND guild_id = ? AND status = {Duel.ONGOING}
-        '''
-        rc = self.conn.execute(query, (finish_time, winner, duelid, guild_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
+    async def complete_duel(
+        self,
+        duelid: int,
+        guild_id: int,
+        winner: int,
+        finish_time: float,
+        winner_id: int = -1,
+        loser_id: int = -1,
+        delta: int = 0,
+        dtype: int = DuelType.OFFICIAL,
+    ) -> int:
+        query = """
+            UPDATE duel SET status = ?, finish_time = ?, winner = ?
+            WHERE id = ? AND guild_id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(
+            query,
+            (Duel.COMPLETE, finish_time, winner, duelid, guild_id, Duel.ONGOING),
+        )
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
             return 0
 
-        if dtype == DuelType.OFFICIAL or dtype == DuelType.ADJOFFICIAL:
-            self.update_duel_rating(winner_id, guild_id, +delta)
-            self.update_duel_rating(loser_id, guild_id, -delta)
+        if dtype in (DuelType.OFFICIAL, DuelType.ADJOFFICIAL):
+            await self.update_duel_rating(winner_id, guild_id, +delta)
+            await self.update_duel_rating(loser_id, guild_id, -delta)
 
-        self.conn.commit()
+        await self.conn.commit()
         return 1
 
-    def update_duel_rating(self, userid, guild_id, delta):
-        query = '''
+    async def update_duel_rating(self, userid: int, guild_id: int, delta: int) -> int:
+        query = """
             UPDATE duelist SET rating = rating + ? WHERE user_id = ? AND guild_id = ?
-        '''
-        rc = self.conn.execute(query, (delta, userid, guild_id)).rowcount
-        self.conn.commit()
-        return rc
+        """
+        cursor = await self.conn.execute(query, (delta, userid, guild_id))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def get_duel_wins(self, userid, guild_id):
-        query = f'''
-            SELECT start_time, finish_time, problem_name, challenger, challengee FROM duel
-            WHERE ((challenger = ? AND winner == {Winner.CHALLENGER}) OR (challengee = ? AND winner == {Winner.CHALLENGEE})) AND status = {Duel.COMPLETE} AND guild_id = ?
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchall()
+    async def get_duel_wins(self, userid: int, guild_id: int) -> list[Any]:
+        query = """
+            SELECT
+                start_time, finish_time, problem_name, challenger, challengee FROM duel
+            WHERE (
+                (challenger = ? AND winner == ?)
+                OR (challengee = ? AND winner == ?)
+            ) AND status = ? AND guild_id = ?
+        """
+        cursor = await self.conn.execute(
+            query,
+            (
+                userid,
+                Winner.CHALLENGER,
+                userid,
+                Winner.CHALLENGEE,
+                Duel.COMPLETE,
+                guild_id,
+            ),
+        )
+        return await cursor.fetchall()
 
-    def get_duels(self, userid, guild_id):
-        query = f'''
-            SELECT id, start_time, finish_time, problem_name, challenger, challengee, winner FROM duel WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND status == {Duel.COMPLETE} ORDER BY start_time DESC
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchall()
+    async def get_duels(self, userid: int, guild_id: int) -> list[Any]:
+        query = """
+            SELECT
+                id, start_time, finish_time, problem_name, challenger,
+                challengee, winner
+            FROM duel
+            WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND status == ?
+            ORDER BY start_time DESC
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.COMPLETE)
+        )
+        return await cursor.fetchall()
 
-    def get_duel_problem_names(self, userid, guild_id):
-        query = f'''
-            SELECT problem_name FROM duel WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND (status == {Duel.COMPLETE} OR status == {Duel.INVALID})
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchall()
+    async def get_duel_problem_names(self, userid: int, guild_id: int) -> list[Any]:
+        query = """
+            SELECT problem_name
+            FROM duel
+            WHERE
+                (challengee = ? OR challenger = ?)
+                AND guild_id = ?
+                AND (status == ? OR status == ?)
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.COMPLETE, Duel.INVALID)
+        )
+        return await cursor.fetchall()
 
-    def get_pair_duels(self, userid1, userid2, guild_id):
-        query = f'''
-            SELECT id, start_time, finish_time, problem_name, challenger, challengee, winner FROM duel
-            WHERE ((challenger = ? AND challengee = ?) OR (challenger = ? AND challengee = ?)) AND guild_id = ? AND status == {Duel.COMPLETE} ORDER BY start_time DESC
-        '''
-        return self.conn.execute(query, (userid1, userid2, userid2, userid1, guild_id)).fetchall()
+    async def get_pair_duels(
+        self, userid1: int, userid2: int, guild_id: int
+    ) -> list[Any]:
+        query = """
+            SELECT
+                id, start_time, finish_time, problem_name, challenger,
+                challengee, winner FROM duel
+            WHERE (
+                (challenger = ? AND challengee = ?)
+                OR (challenger = ? AND challengee = ?)
+            ) AND guild_id = ? AND status == ?
+            ORDER BY start_time DESC
+        """
+        cursor = await self.conn.execute(
+            query, (userid1, userid2, userid2, userid1, guild_id, Duel.COMPLETE)
+        )
+        return await cursor.fetchall()
 
-    def get_recent_duels(self, guild_id):
-        query = f'''
-            SELECT id, start_time, finish_time, problem_name, challenger, challengee, winner FROM duel WHERE status == {Duel.COMPLETE} AND guild_id = ? ORDER BY start_time DESC LIMIT 7
-        '''
-        return self.conn.execute(query, (guild_id,)).fetchall()
+    async def get_recent_duels(self, guild_id: int) -> list[Any]:
+        query = """
+            SELECT
+                id, start_time, finish_time, problem_name, challenger,
+                challengee, winner
+            FROM duel
+            WHERE status == ? AND guild_id = ?
+            ORDER BY start_time DESC
+            LIMIT 7
+        """
+        cursor = await self.conn.execute(query, (Duel.COMPLETE, guild_id))
+        return await cursor.fetchall()
 
-    def get_ongoing_duels(self, guild_id):
-        query = f'''
-            SELECT id, challenger, challengee, start_time, problem_name, contest_id, p_index, type FROM duel
-            WHERE status == {Duel.ONGOING} AND guild_id = ? ORDER BY start_time DESC
-        '''
-        return self.conn.execute(query, (guild_id,)).fetchall()
+    async def get_ongoing_duels(self, guild_id: int) -> list[Any]:
+        query = """
+            SELECT id, challenger, challengee, start_time, problem_name,
+                contest_id, p_index, type
+            FROM duel
+            WHERE status == ? AND guild_id = ? ORDER BY start_time DESC
+        """
+        cursor = await self.conn.execute(query, (Duel.ONGOING, guild_id))
+        return await cursor.fetchall()
 
-    def get_num_duel_completed(self, userid, guild_id):
-        query = f'''
-            SELECT COUNT(*) FROM duel WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND status == {Duel.COMPLETE}
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()[0]
+    async def get_num_duel_completed(self, userid: int, guild_id: int) -> int:
+        query = """
+            SELECT COUNT(*) AS cnt
+            FROM duel
+            WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Duel.COMPLETE)
+        )
+        return (await cursor.fetchone())[0]
 
-    def get_num_duel_draws(self, userid, guild_id):
-        query = f'''
-            SELECT COUNT(*) FROM duel WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND winner == {Winner.DRAW}
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()[0]
+    async def get_num_duel_draws(self, userid: int, guild_id: int) -> int:
+        query = """
+            SELECT COUNT(*) AS cnt
+            FROM duel
+            WHERE (challengee = ? OR challenger = ?) AND guild_id = ? AND winner == ?
+        """
+        cursor = await self.conn.execute(
+            query, (userid, userid, guild_id, Winner.DRAW)
+        )
+        return (await cursor.fetchone())[0]
 
-    def get_num_duel_losses(self, userid, guild_id):
-        query = f'''
-            SELECT COUNT(*) FROM duel
-            WHERE ((challengee = ? AND winner == {Winner.CHALLENGER}) OR (challenger = ? AND winner == {Winner.CHALLENGEE})) AND guild_id = ? AND status = {Duel.COMPLETE}
-        '''
-        return self.conn.execute(query, (userid, userid, guild_id)).fetchone()[0]
+    async def get_num_duel_losses(self, userid: int, guild_id: int) -> int:
+        query = """
+            SELECT COUNT(*) AS cnt
+            FROM duel
+            WHERE (
+                (challengee = ? AND winner == ?)
+                OR (challenger = ? AND winner == ?)
+            ) AND guild_id = ? AND status = ?
+        """
+        cursor = await self.conn.execute(
+            query,
+            (
+                userid,
+                Winner.CHALLENGER,
+                userid,
+                Winner.CHALLENGEE,
+                guild_id,
+                Duel.COMPLETE,
+            ),
+        )
+        return (await cursor.fetchone())[0]
 
-    def get_num_duel_declined(self, userid, guild_id):
-        query = f'''
-            SELECT COUNT(*) FROM duel WHERE challengee = ? AND guild_id = ? AND status == {Duel.DECLINED}
-        '''
-        return self.conn.execute(query, (userid, guild_id)).fetchone()[0]
+    async def get_num_duel_declined(self, userid: int, guild_id: int) -> int:
+        query = """
+            SELECT COUNT(*) AS cnt
+            FROM duel
+            WHERE challengee = ? AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(query, (userid, guild_id, Duel.DECLINED))
+        return (await cursor.fetchone())[0]
 
-    def get_num_duel_rdeclined(self, userid, guild_id):
-        query = f'''
-            SELECT COUNT(*) FROM duel WHERE challenger = ? AND guild_id = ? AND status == {Duel.DECLINED}
-        '''
-        return self.conn.execute(query, (userid,guild_id)).fetchone()[0]
+    async def get_num_duel_rdeclined(self, userid: int, guild_id: int) -> int:
+        query = """
+            SELECT COUNT(*) AS cnt
+            FROM duel
+            WHERE challenger = ? AND guild_id = ? AND status == ?
+        """
+        cursor = await self.conn.execute(query, (userid, guild_id, Duel.DECLINED))
+        return (await cursor.fetchone())[0]
 
-    def get_duel_rating(self, userid, guild_id):
-        query = '''
-            SELECT rating FROM duelist WHERE user_id = ? AND guild_id = ?
-        '''
-        return self.conn.execute(query, (userid,guild_id)).fetchone()[0]
+    async def get_duel_rating(self, userid: int, guild_id: int) -> int:
+        query = """
+            SELECT rating
+            FROM duelist
+            WHERE user_id = ? AND guild_id = ?
+        """
+        cursor = await self.conn.execute(query, (userid, guild_id))
+        return (await cursor.fetchone())[0]
 
-    def is_duelist(self, userid, guild_id):
-        query = '''
-            SELECT 1 FROM duelist WHERE user_id = ? AND guild_id = ?
-        '''
-        return self.conn.execute(query, (userid,guild_id)).fetchone()
+    async def is_duelist(self, userid: int, guild_id: int) -> Any:
+        query = """
+            SELECT 1 AS x
+            FROM duelist
+            WHERE user_id = ? AND guild_id = ?
+        """
+        cursor = await self.conn.execute(query, (userid, guild_id))
+        return await cursor.fetchone()
 
-    def register_duelist(self, userid, guild_id):
-        query = '''
+    async def register_duelist(self, userid: int, guild_id: int) -> int:
+        query = """
             INSERT OR IGNORE INTO duelist (user_id, rating, guild_id)
             VALUES (?, 1500, ?)
-        '''
-        with self.conn:
-            return self.conn.execute(query, (userid,guild_id)).rowcount
+        """
+        cursor = await self.conn.execute(query, (userid, guild_id))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def get_duelists(self, guild_id):
-        query = '''
-            SELECT user_id, rating FROM duelist WHERE guild_id = ? ORDER BY rating DESC
-        '''
-        return self.conn.execute(query, (guild_id,)).fetchall()
+    async def get_duelists(self, guild_id: int) -> list[Any]:
+        query = """
+            SELECT user_id, rating
+            FROM duelist
+            WHERE guild_id = ?
+            ORDER BY rating DESC
+        """
+        cursor = await self.conn.execute(query, (guild_id,))
+        return await cursor.fetchall()
 
-    def get_complete_official_duels(self, guild_id):
-        query = f'''
-            SELECT challenger, challengee, winner, finish_time FROM duel WHERE status={Duel.COMPLETE}
-            AND (type={DuelType.OFFICIAL} OR type={DuelType.ADJOFFICIAL}) AND guild_id = ? ORDER BY finish_time ASC
-        '''
-        return self.conn.execute(query, (guild_id,)).fetchall()
+    async def get_complete_official_duels(self, guild_id: int) -> list[Any]:
+        query = """
+            SELECT challenger, challengee, winner, finish_time
+            FROM duel
+            WHERE
+                status = ? AND (type = ? OR type = ?) AND guild_id = ?
+            ORDER BY finish_time ASC
+        """
+        cursor = await self.conn.execute(
+            query,
+            (Duel.COMPLETE, DuelType.OFFICIAL, DuelType.ADJOFFICIAL, guild_id),
+        )
+        return await cursor.fetchall()
 
-    def get_rankup_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM rankup '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
+    # Training stuff
+
+    async def set_training_channel(self, guild_id: int, channel_id: int) -> None:
+        query = """
+            INSERT OR REPLACE INTO training_settings (guild_id, channel_id)
+            VALUES (?, ?)
+        """
+        await self.conn.execute(query, (guild_id, channel_id))
+        await self.conn.commit()
+
+    async def get_training_channel(self, guild_id: int) -> int | None:
+        query = 'SELECT channel_id FROM training_settings WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        row = await cursor.fetchone()
+        return int(row[0]) if row else None
+
+    async def new_training(
+        self,
+        user_id: int,
+        issue_time: float,
+        prob: Any,
+        mode: int,
+        score: int,
+        lives: int,
+        time_left: float,
+    ) -> int:
+        query1 = f"""
+            INSERT INTO trainings
+            (user_id, score, lives, time_left, mode, status)
+            VALUES
+            (?, 0, ?, ?, ?, {Training.ACTIVE})
+        """
+        query2 = f"""
+            INSERT INTO training_problems
+            (training_id, issue_time, problem_name, contest_id, p_index, rating, status)
+            VALUES (?, ?, ?, ?, ?, ?, {TrainingProblemStatus.ACTIVE})
+        """
+        cursor = await self.conn.execute(query1, (user_id, lives, time_left, mode))
+        training_id, rc = cursor.lastrowid, cursor.rowcount
+        if rc != 1:
+            await self.conn.rollback()
+            return 0
+        cursor = await self.conn.execute(
+            query2,
+            (training_id, issue_time, prob.name, prob.contestId, prob.index, prob.rating),
+        )
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
+            return 0
+        await self.conn.commit()
+        return 1
+
+    async def get_active_training(self, user_id: int) -> tuple[Any, ...] | None:
+        query1 = f"""
+            SELECT id, mode, score, lives, time_left FROM trainings
+            WHERE user_id = ? AND status = {Training.ACTIVE}
+        """
+        cursor = await self.conn.execute(query1, (user_id,))
+        res = await cursor.fetchone()
+        if res is None:
+            return None
+        training_id, mode, score, lives, time_left = res
+        query2 = f"""
+            SELECT issue_time, problem_name, contest_id, p_index, rating
+            FROM training_problems
+            WHERE training_id = ? AND status = {TrainingProblemStatus.ACTIVE}
+        """
+        cursor = await self.conn.execute(query2, (training_id,))
+        res = await cursor.fetchone()
+        if res is None:
+            return None
+        return (
+            training_id, res[0], res[1], res[2], res[3], res[4],
+            mode, score, lives, time_left,
+        )
+
+    async def get_latest_training(self, user_id: int) -> tuple[Any, ...] | None:
+        query1 = f"""
+            SELECT id, mode, score, lives, time_left FROM trainings
+            WHERE user_id = ? AND status = {Training.COMPLETED} ORDER BY id DESC
+        """
+        cursor = await self.conn.execute(query1, (user_id,))
+        res = await cursor.fetchone()
+        if res is None:
+            return None
+        training_id, mode, score, lives, time_left = res
+        return (
+            training_id, None, None, None, None, None, mode, score, lives, time_left,
+        )
+
+    async def end_current_training_problem(
+        self,
+        training_id: int,
+        finish_time: float,
+        status: int,
+        score: int,
+        lives: int,
+        time_left: float,
+    ) -> int:
+        query1 = f"""
+            UPDATE training_problems SET finish_time = ?, status = ?
+            WHERE training_id = ? AND status = {TrainingProblemStatus.ACTIVE}
+        """
+        query2 = """
+            UPDATE trainings SET score = ?, lives = ?, time_left = ?
+            WHERE id = ?
+        """
+        cursor = await self.conn.execute(query1, (finish_time, status, training_id))
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
+            return -1
+        cursor = await self.conn.execute(
+            query2, (score, lives, time_left, training_id)
+        )
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
+            return -2
+        await self.conn.commit()
+        return 1
+
+    async def assign_training_problem(
+        self, training_id: int, issue_time: float, prob: Any
+    ) -> int:
+        query1 = f"""
+            INSERT INTO training_problems
+            (training_id, issue_time, problem_name, contest_id, p_index, rating, status)
+            VALUES (?, ?, ?, ?, ?, ?, {TrainingProblemStatus.ACTIVE})
+        """
+        cursor = await self.conn.execute(
+            query1,
+            (training_id, issue_time, prob.name, prob.contestId, prob.index, prob.rating),
+        )
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
+            return -1
+        await self.conn.commit()
+        return 1
+
+    async def finish_training(self, training_id: int) -> int:
+        query1 = f"""
+            UPDATE trainings SET status = {Training.COMPLETED}
+            WHERE id = ?
+        """
+        cursor = await self.conn.execute(query1, (training_id,))
+        if cursor.rowcount != 1:
+            await self.conn.rollback()
+            return -1
+        await self.conn.commit()
+        return 1
+
+    async def get_training_skips(self, user_id: int) -> set[str]:
+        query = f"""
+            SELECT tp.problem_name
+            FROM training_problems tp, trainings tr
+            WHERE tp.training_id = tr.id
+            AND (tp.status = {TrainingProblemStatus.SKIPPED}
+                OR tp.status = {TrainingProblemStatus.INVALIDATED})
+            AND tr.user_id = ?
+        """
+        cursor = await self.conn.execute(query, (user_id,))
+        return {name for (name,) in await cursor.fetchall()}
+
+    async def train_get_num_solves(self, training_id: int) -> int:
+        query = f"""
+            SELECT COUNT(*) FROM training_problems
+            WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED}
+        """
+        cursor = await self.conn.execute(query, (training_id,))
+        return (await cursor.fetchone())[0]
+
+    async def train_get_num_skips(self, training_id: int) -> int:
+        query = f"""
+            SELECT COUNT(*) FROM training_problems
+            WHERE training_id = ? AND status == {TrainingProblemStatus.SKIPPED}
+        """
+        cursor = await self.conn.execute(query, (training_id,))
+        return (await cursor.fetchone())[0]
+
+    async def train_get_num_slow_solves(self, training_id: int) -> int:
+        query = f"""
+            SELECT COUNT(*) FROM training_problems
+            WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED_TOO_SLOW}
+        """
+        cursor = await self.conn.execute(query, (training_id,))
+        return (await cursor.fetchone())[0]
+
+    async def train_get_start_rating(self, training_id: int) -> int:
+        query = """
+            SELECT rating FROM training_problems
+            WHERE training_id = ?
+        """
+        cursor = await self.conn.execute(query, (training_id,))
+        return (await cursor.fetchone())[0]
+
+    async def train_get_max_rating(self, training_id: int) -> int:
+        query = f"""
+            SELECT MAX(rating) FROM training_problems
+            WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED}
+        """
+        cursor = await self.conn.execute(query, (training_id,))
+        return (await cursor.fetchone())[0]
+
+    async def train_get_fastest_solves(self) -> list[Any]:
+        query = f"""
+            SELECT tr.user_id, tp.rating, min(tp.finish_time - tp.issue_time)
+            FROM training_problems tp, trainings tr
+            WHERE tp.training_id = tr.id
+            AND (tp.status = {TrainingProblemStatus.SOLVED}
+                OR tp.status = {TrainingProblemStatus.SOLVED_TOO_SLOW})
+            GROUP BY tp.rating
+        """
+        cursor = await self.conn.execute(query)
+        return await cursor.fetchall()
+
+    # Lockout round stuff
+
+    async def set_round_channel(self, guild_id: int, channel_id: int) -> None:
+        query = """
+            INSERT OR REPLACE INTO round_settings (guild_id, channel_id)
+            VALUES (?, ?)
+        """
+        await self.conn.execute(query, (guild_id, channel_id))
+        await self.conn.commit()
+
+    async def get_round_channel(self, guild_id: int) -> int | None:
+        query = 'SELECT channel_id FROM round_settings WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        row = await cursor.fetchone()
+        return int(row[0]) if row else None
+
+    async def create_ongoing_round(
+        self,
+        guild_id: int,
+        timestamp: float,
+        users: list[Any],
+        rating: list[int],
+        points: list[int],
+        problems: list[Any],
+        duration: int,
+        repeat: int,
+    ) -> None:
+        query = """
+            INSERT INTO lockout_ongoing_rounds
+            (guild, users, rating, points, time, problems, status, duration, repeat, times)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        await self.conn.execute(
+            query,
+            (
+                guild_id,
+                ' '.join(f'{x.id}' for x in users),
+                ' '.join(map(str, rating)),
+                ' '.join(map(str, points)),
+                timestamp,
+                ' '.join(f'{x.contestId}/{x.index}' for x in problems),
+                ' '.join('0' for _ in range(len(users))),
+                duration,
+                repeat,
+                ' '.join(['0'] * len(users)),
+            ),
+        )
+        await self.conn.commit()
+
+    async def create_finished_round(self, round_info: Any, timestamp: float) -> None:
+        query = """
+            INSERT INTO lockout_finished_rounds
+            (guild, users, rating, points, time, problems, status, duration, repeat,
+             times, end_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        await self.conn.execute(
+            query,
+            (
+                round_info.guild,
+                round_info.users,
+                round_info.rating,
+                round_info.points,
+                round_info.time,
+                round_info.problems,
+                round_info.status,
+                round_info.duration,
+                round_info.repeat,
+                round_info.times,
+                timestamp,
+            ),
+        )
+        await self.conn.commit()
+
+    async def update_round_status(
+        self, guild: int, user: int, status: list[Any], problems: list[str],
+        timestamp: list[Any],
+    ) -> None:
+        query = """
+            UPDATE lockout_ongoing_rounds
+            SET
+                status = ?,
+                problems = ?,
+                times = ?
+            WHERE
+                guild = ? AND users LIKE ?
+        """
+        await self.conn.execute(
+            query,
+            (
+                ' '.join(str(x) for x in status),
+                ' '.join(problems),
+                ' '.join(str(x) for x in timestamp),
+                guild,
+                f'%{user}%',
+            ),
+        )
+        await self.conn.commit()
+
+    async def get_round_info(self, guild_id: int, users: int) -> LockoutRound:
+        query = """
+            SELECT * FROM lockout_ongoing_rounds
+            WHERE guild = ? AND users LIKE ?
+        """
+        cursor = await self.conn.execute(query, (guild_id, f'%{users}%'))
+        data = await cursor.fetchone()
+        return LockoutRound(*data[1:])
+
+    async def check_if_user_in_ongoing_round(self, guild: int, user: int) -> bool:
+        query = """
+            SELECT * FROM lockout_ongoing_rounds
+            WHERE users LIKE ? AND guild = ?
+        """
+        cursor = await self.conn.execute(query, (f'%{user}%', guild))
+        data = await cursor.fetchall()
+        return len(data) > 0
+
+    async def delete_round(self, guild: int, user: int) -> None:
+        query = """
+            DELETE FROM lockout_ongoing_rounds
+            WHERE guild = ? AND users LIKE ?
+        """
+        await self.conn.execute(query, (guild, f'%{user}%'))
+        await self.conn.commit()
+
+    async def get_ongoing_rounds(self, guild: int) -> list[LockoutRound]:
+        query = 'SELECT * FROM lockout_ongoing_rounds WHERE guild = ?'
+        cursor = await self.conn.execute(query, (guild,))
+        res = await cursor.fetchall()
+        return [LockoutRound(*data[1:]) for data in res]
+
+    async def get_recent_rounds(
+        self, guild: int, user: int | None = None
+    ) -> list[FinishedLockoutRound]:
+        query = """
+            SELECT * FROM lockout_finished_rounds
+            WHERE guild = ? AND users LIKE ?
+            ORDER BY end_time DESC
+        """
+        cursor = await self.conn.execute(
+            query, (guild, '%' if user is None else f'%{user}%')
+        )
+        res = await cursor.fetchall()
+        return [FinishedLockoutRound(*data[1:]) for data in res]
+
+    async def get_rankup_channel(self, guild_id: int) -> int | None:
+        query = 'SELECT channel_id FROM rankup WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        channel_id = await cursor.fetchone()
         return int(channel_id[0]) if channel_id else None
 
-    def set_rankup_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO rankup '
-                 '(guild_id, channel_id) '
-                 'VALUES (?, ?)')
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+    async def set_rankup_channel(self, guild_id: int, channel_id: int) -> None:
+        query = 'INSERT OR REPLACE INTO rankup (guild_id, channel_id) VALUES (?, ?)'
+        await self.conn.execute(query, (guild_id, channel_id))
+        await self.conn.commit()
 
-    def clear_rankup_channel(self, guild_id):
-        query = ('DELETE FROM rankup '
-                 'WHERE guild_id = ?')
-        with self.conn:
-            return self.conn.execute(query, (guild_id,)).rowcount
+    async def clear_rankup_channel(self, guild_id: int) -> int:
+        query = 'DELETE FROM rankup WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def enable_auto_role_update(self, guild_id):
-        query = ('INSERT OR REPLACE INTO auto_role_update '
-                 '(guild_id) '
-                 'VALUES (?)')
-        with self.conn:
-            return self.conn.execute(query, (guild_id,)).rowcount
+    async def enable_auto_role_update(self, guild_id: int) -> int:
+        query = 'INSERT OR REPLACE INTO auto_role_update (guild_id) VALUES (?)'
+        cursor = await self.conn.execute(query, (guild_id,))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def disable_auto_role_update(self, guild_id):
-        query = ('DELETE FROM auto_role_update '
-                 'WHERE guild_id = ?')
-        with self.conn:
-            return self.conn.execute(query, (guild_id,)).rowcount
+    async def disable_auto_role_update(self, guild_id: int) -> int:
+        query = 'DELETE FROM auto_role_update WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def has_auto_role_update_enabled(self, guild_id):
-        query = ('SELECT 1 '
-                 'FROM auto_role_update '
-                 'WHERE guild_id = ?')
-        return self.conn.execute(query, (guild_id,)).fetchone() is not None
+    async def has_auto_role_update_enabled(self, guild_id: int) -> bool:
+        query = 'SELECT 1 AS x FROM auto_role_update WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        return await cursor.fetchone() is not None
 
-    def reset_status(self, id):
-        inactive_query = '''
+    async def reset_status(self, id: int) -> None:
+        inactive_query = """
             UPDATE user_handle
             SET active = 0
             WHERE guild_id = ?
-        '''
-        self.conn.execute(inactive_query, (id,))
-        self.conn.commit()
+        """
+        await self.conn.execute(inactive_query, (id,))
+        await self.conn.commit()
 
-    def update_status(self, guild_id: str, active_ids: list):
+    async def update_status(self, guild_id: str, active_ids: list[str]) -> int:
         placeholders = ', '.join(['?'] * len(active_ids))
-        if not active_ids: return 0
-        active_query = '''
+        if not active_ids:
+            return 0
+        active_query = """
             UPDATE user_handle
             SET active = 1
             WHERE user_id IN ({})
             AND guild_id = ?
-        '''.format(placeholders)
-        rc = self.conn.execute(active_query, (*active_ids, guild_id)).rowcount
-        self.conn.commit()
-        return rc
+        """.format(placeholders)
+        cursor = await self.conn.execute(active_query, (*active_ids, guild_id))
+        await self.conn.commit()
+        return cursor.rowcount
 
     # Rated VC stuff
 
-    def create_rated_vc(self, contest_id: int, start_time: float, finish_time: float, guild_id: str, user_ids: [str]):
-        """ Creates a rated vc and returns its id.
+    async def create_rated_vc(
+        self,
+        contest_id: int,
+        start_time: float,
+        finish_time: float,
+        guild_id: str,
+        user_ids: list[str],
+    ) -> int | None:
+        """Creates a rated vc and returns its id."""
+        query = """
+            INSERT INTO rated_vcs (
+                contest_id, start_time, finish_time, status, guild_id
+            ) VALUES ( ?, ?, ?, ?, ?)
         """
-        query = ('INSERT INTO rated_vcs '
-                 '(contest_id, start_time, finish_time, status, guild_id) '
-                 'VALUES ( ?, ?, ?, ?, ?)')
-        id = None
-        with self.conn:
-            id = self.conn.execute(query, (contest_id, start_time, finish_time, RatedVC.ONGOING, guild_id)).lastrowid
-            for user_id in user_ids:
-                query = ('INSERT INTO rated_vc_users '
-                         '(vc_id, user_id) '
-                         'VALUES (? , ?)')
-                self.conn.execute(query, (id, user_id))
-        return id
+        cursor = await self.conn.execute(
+            query, (contest_id, start_time, finish_time, RatedVC.ONGOING, guild_id)
+        )
+        vc_id = cursor.lastrowid
+        for user_id in user_ids:
+            query = 'INSERT INTO rated_vc_users (vc_id, user_id) VALUES (? , ?)'
+            await self.conn.execute(query, (vc_id, user_id))
+        await self.conn.commit()
+        return vc_id
 
-    def get_rated_vc(self, vc_id: int):
-        query = ('SELECT * '
-                'FROM rated_vcs '
-                'WHERE id = ? ')
-        vc = self._fetchone(query, params=(vc_id,), row_factory=namedtuple_factory)
-        return vc
+    async def get_rated_vc(self, vc_id: int) -> Any:
+        query = 'SELECT * FROM rated_vcs WHERE id = ? '
+        return await self._fetchone(
+            query, params=(vc_id,), row_factory=namedtuple_factory
+        )
 
-    def get_ongoing_rated_vc_ids(self):
-        query = ('SELECT id '
-                 'FROM rated_vcs '
-                 'WHERE status = ? '
-                 )
-        vcs = self._fetchall(query, params=(RatedVC.ONGOING,), row_factory=namedtuple_factory)
+    async def get_ongoing_rated_vc_ids(self) -> list[int]:
+        query = 'SELECT id FROM rated_vcs WHERE status = ? '
+        vcs = await self._fetchall(
+            query, params=(RatedVC.ONGOING,), row_factory=namedtuple_factory
+        )
         vc_ids = [vc.id for vc in vcs]
         return vc_ids
 
-    def get_rated_vc_user_ids(self, vc_id: int):
-        query = ('SELECT user_id '
-                 'FROM rated_vc_users '
-                 'WHERE vc_id = ? '
-                 )
-        users = self._fetchall(query, params=(vc_id,), row_factory=namedtuple_factory)
+    async def get_rated_vc_user_ids(self, vc_id: int) -> list[str]:
+        query = 'SELECT user_id FROM rated_vc_users WHERE vc_id = ? '
+        users = await self._fetchall(
+            query, params=(vc_id,), row_factory=namedtuple_factory
+        )
         user_ids = [user.user_id for user in users]
         return user_ids
 
-    def finish_rated_vc(self, vc_id: int):
-        query = ('UPDATE rated_vcs '
-                'SET status = ? '
-                'WHERE id = ? ')
+    async def finish_rated_vc(self, vc_id: int) -> None:
+        query = 'UPDATE rated_vcs SET status = ? WHERE id = ? '
+        await self.conn.execute(query, (RatedVC.FINISHED, vc_id))
+        await self.conn.commit()
 
-        with self.conn:
-            self.conn.execute(query, (RatedVC.FINISHED, vc_id))
+    async def update_vc_rating(self, vc_id: int, user_id: str, rating: int) -> None:
+        query = """
+            INSERT OR REPLACE INTO rated_vc_users (vc_id, user_id, rating)
+            VALUES (?, ?, ?)
+        """
+        await self.conn.execute(query, (vc_id, user_id, rating))
+        await self.conn.commit()
 
-    def update_vc_rating(self, vc_id: int, user_id: str, rating: int):
-        query = ('INSERT OR REPLACE INTO rated_vc_users '
-                 '(vc_id, user_id, rating) '
-                 'VALUES (?, ?, ?) ')
-
-        with self.conn:
-            self.conn.execute(query, (vc_id, user_id, rating))
-
-    def get_vc_rating(self, user_id: str, default_if_not_exist: bool = True):
-        query = ('SELECT MAX(vc_id) AS latest_vc_id, rating '
-                 'FROM rated_vc_users '
-                 'WHERE user_id = ? AND rating IS NOT NULL'
-                 )
-        rating = self._fetchone(query, params=(user_id, ), row_factory=namedtuple_factory).rating
+    async def get_vc_rating(
+        self, user_id: str, default_if_not_exist: bool = True
+    ) -> int | None:
+        query = """
+            SELECT
+                MAX(vc_id) AS latest_vc_id,
+                rating
+            FROM rated_vc_users
+            WHERE user_id = ? AND rating IS NOT NULL
+        """
+        row = await self._fetchone(
+            query, params=(user_id,), row_factory=namedtuple_factory
+        )
+        rating = row.rating
         if rating is None:
             if default_if_not_exist:
                 return _DEFAULT_VC_RATING
             return None
         return rating
 
-    def get_vc_rating_history(self, user_id: str):
-        """ Return [vc_id, rating].
+    async def get_vc_rating_history(self, user_id: str) -> list[Any]:
+        """Return [vc_id, rating]."""
+        query = """
+            SELECT
+                vc_id,
+                rating
+            FROM rated_vc_users
+            WHERE user_id = ? AND rating IS NOT NULL
         """
-        query = ('SELECT vc_id, rating '
-                 'FROM rated_vc_users '
-                 'WHERE user_id = ? AND rating IS NOT NULL'
-                 )
-        ratings = self._fetchall(query, params=(user_id,), row_factory=namedtuple_factory)
+        ratings = await self._fetchall(
+            query, params=(user_id,), row_factory=namedtuple_factory
+        )
         return ratings
 
-    def set_rated_vc_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO rated_vc_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+    async def set_rated_vc_channel(self, guild_id: int, channel_id: int) -> None:
+        query = """
+            INSERT OR REPLACE INTO rated_vc_settings (guild_id, channel_id)
+            VALUES (?, ?)
+        """
+        await self.conn.execute(query, (guild_id, channel_id))
+        await self.conn.commit()
 
-    def get_rated_vc_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM rated_vc_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
+    async def get_rated_vc_channel(self, guild_id: int) -> int | None:
+        query = 'SELECT channel_id FROM rated_vc_settings WHERE guild_id = ?'
+        cursor = await self.conn.execute(query, (guild_id,))
+        channel_id = await cursor.fetchone()
         return int(channel_id[0]) if channel_id else None
 
-    def remove_last_ratedvc_participation(self, user_id: str):
-        query = ('SELECT MAX(vc_id) AS vc_id '
-                 'FROM rated_vc_users '
-                 'WHERE user_id = ? '
-                 )
-        vc_id = self._fetchone(query, params=(user_id, ), row_factory=namedtuple_factory).vc_id
-        query = ('DELETE FROM rated_vc_users '
-                 'WHERE user_id = ? AND vc_id = ? ')
-        with self.conn:
-            return self.conn.execute(query, (user_id, vc_id)).rowcount
+    async def remove_last_ratedvc_participation(self, user_id: str) -> int:
+        query = 'SELECT MAX(vc_id) AS vc_id FROM rated_vc_users WHERE user_id = ? '
+        row = await self._fetchone(
+            query, params=(user_id,), row_factory=namedtuple_factory
+        )
+        vc_id = row.vc_id
+        query = 'DELETE FROM rated_vc_users WHERE user_id = ? AND vc_id = ? '
+        cursor = await self.conn.execute(query, (user_id, vc_id))
+        await self.conn.commit()
+        return cursor.rowcount
 
-    def set_training_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO training_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
-
-    def get_training_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM training_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
-
-    def new_training(self, user_id, issue_time, prob, mode, score, lives, time_left):
-        query1 = f'''
-            INSERT INTO trainings
-            (user_id, score, lives, time_left, mode, status)
-            VALUES
-            (?, 0, ?, ?, ?, {Training.ACTIVE})
-        '''
-        query2 = f'''
-            INSERT INTO training_problems (training_id, issue_time, problem_name, contest_id, p_index, rating, status)
-            VALUES (?, ?, ?, ?, ?, ?, {TrainingProblemStatus.ACTIVE})
-        '''
-        cur = self.conn.cursor()
-        cur.execute(query1, (user_id, lives, time_left, mode))
-        training_id, rc = cur.lastrowid, cur.rowcount
-        if rc != 1:
-            self.conn.rollback()
-            return 0
-        cur.execute(query2, (training_id, issue_time, prob.name, prob.contestId, prob.index, prob.rating))
-        if cur.rowcount != 1:
-            self.conn.rollback()
-            return 0
-        self.conn.commit()
-        return 1
-
-
-    def get_active_training(self, user_id):
-        query1 = f'''
-            SELECT id, mode, score, lives, time_left FROM trainings
-            WHERE user_id = ? AND status = {Training.ACTIVE}
-        '''
-        res = self.conn.execute(query1, (user_id,)).fetchone()
-        if res is None: return None
-        training_id,mode,score,lives,time_left = res
-        query2 = f'''
-            SELECT issue_time, problem_name, contest_id, p_index, rating FROM training_problems
-            WHERE training_id = ? AND status = {TrainingProblemStatus.ACTIVE}
-        '''
-        res = self.conn.execute(query2, (training_id,)).fetchone()
-        if res is None: return None
-        return training_id, res[0], res[1], res[2], res[3], res[4], mode, score, lives,time_left
-
-    def get_latest_training(self, user_id):
-        query1 = f'''
-            SELECT id, mode, score, lives, time_left FROM trainings
-            WHERE user_id = ? AND status = {Training.COMPLETED} ORDER BY id DESC
-        '''
-        res = self.conn.execute(query1, (user_id,)).fetchone()
-        if res is None: return None
-        training_id,mode,score,lives,time_left = res
-        return training_id, None, None, None, None, None, mode, score, lives,time_left
-
-
-    def end_current_training_problem(self, training_id, finish_time, status, score, lives, time_left):
-        query1 = f'''
-            UPDATE training_problems SET finish_time = ?, status = ?
-            WHERE training_id = ? AND status = {TrainingProblemStatus.ACTIVE}
-        '''
-        query2 = '''
-            UPDATE trainings SET score = ?, lives = ?, time_left = ?
-            WHERE id = ?
-        '''
-        rc = self.conn.execute(query1, (finish_time, status, training_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
-            return -1
-        rc = self.conn.execute(query2, (score, lives, time_left, training_id)).rowcount
-        if rc != 1:
-            self.conn.rollback()
-            return -2
-        self.conn.commit()
-        return 1
-
-    def assign_training_problem(self, training_id, issue_time, prob):
-        query1 = f'''
-            INSERT INTO training_problems (training_id, issue_time, problem_name, contest_id, p_index, rating, status)
-            VALUES (?, ?, ?, ?, ?, ?, {TrainingProblemStatus.ACTIVE})
-        '''
-
-        cur = self.conn.cursor()
-        cur.execute(query1, (training_id, issue_time, prob.name, prob.contestId, prob.index, prob.rating))
-        if cur.rowcount != 1:
-            self.conn.rollback()
-            return -1
-        self.conn.commit()
-        return 1
-
-    def finish_training(self, training_id):
-        query1 = f'''
-            UPDATE trainings SET status = {Training.COMPLETED}
-            WHERE id = ?
-        '''
-        rc = self.conn.execute(query1, (training_id,)).rowcount
-        if rc != 1:
-            self.conn.rollback()
-            return -1
-        self.conn.commit()
-        return 1
-
-    def get_training_skips(self, user_id):
-        query = f'''
-            SELECT tp.problem_name
-            FROM training_problems tp, trainings tr
-            WHERE tp.training_id = tr.id
-            AND (tp.status = {TrainingProblemStatus.SKIPPED} OR tp.status = {TrainingProblemStatus.INVALIDATED})
-            AND tr.user_id = ?
-        '''
-        return {name for name, in self.conn.execute(query, (user_id,)).fetchall()}
-
-
-    def train_get_num_solves(self, training_id):
-        query = f'''
-            SELECT COUNT(*) FROM training_problems
-            WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED}
-        '''
-        return self.conn.execute(query, (training_id,)).fetchone()[0]
-
-    def train_get_num_skips(self, training_id):
-        query = f'''
-            SELECT COUNT(*) FROM training_problems
-            WHERE training_id = ? AND status == {TrainingProblemStatus.SKIPPED}
-        '''
-        return self.conn.execute(query, (training_id,)).fetchone()[0]
-
-    def train_get_num_slow_solves(self, training_id):
-        query = f'''
-            SELECT COUNT(*) FROM training_problems
-            WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED_TOO_SLOW}
-        '''
-        return self.conn.execute(query, (training_id,)).fetchone()[0]
-
-    def train_get_start_rating(self, training_id):
-        query = f'''
-            SELECT rating FROM training_problems
-            WHERE training_id = ?
-        '''
-        return self.conn.execute(query, (training_id,)).fetchone()[0]
-
-    def train_get_max_rating(self, training_id):
-        query = f'''
-            SELECT MAX(rating) FROM training_problems
-            WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED}
-        '''
-        return self.conn.execute(query, (training_id,)).fetchone()[0]
-
-    def train_get_fastest_solves(self):
-        query = f'''
-            SELECT tr.user_id, tp.rating, min(tp.finish_time-tp.issue_time)
-            FROM training_problems tp, trainings tr
-            WHERE tp.training_id = tr.id
-            AND (tp.status = {TrainingProblemStatus.SOLVED} OR tp.status = {TrainingProblemStatus.SOLVED_TOO_SLOW})
-            GROUP BY tp.rating
-        '''
-        return self.conn.execute(query).fetchall()
-
-    ### Lockout round
-
-
-    def set_round_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO round_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
-
-    def get_round_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM round_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
-
-    def create_ongoing_round(self, guild_id, timestamp, users, rating, points, problems, duration, repeat):
-        query = f'''
-            INSERT INTO lockout_ongoing_rounds (guild, users, rating, points, time, problems, status, duration, repeat, times)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        '''
-        cur = self.conn.cursor()
-        cur.execute(query, (guild_id, ' '.join([f"{x.id}" for x in users]), 
-                                      ' '.join(map(str, rating)),
-                                      ' '.join(map(str, points)), 
-                                      timestamp, 
-                                      ' '.join([f"{x.contestId}/{x.index}" for x in problems]), 
-                                      ' '.join('0' for i in range(len(users))),
-                                      duration, 
-                                      repeat, 
-                                      ' '.join(['0'] * len(users)))
-                    )
-        self.conn.commit()
-        cur.close()
-
-    def create_finished_round(self, round_info, timestamp):
-        query = f'''
-                    INSERT INTO lockout_finished_rounds (guild, users, rating, points, time, problems, status, duration, repeat, times, end_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                '''
-        cur = self.conn.cursor()
-        cur.execute(query, (round_info.guild, round_info.users, round_info.rating, round_info.points, round_info.time,
-                                round_info.problems, round_info.status, round_info.duration, round_info.repeat,
-                                round_info.times, timestamp))
-        self.conn.commit()
-        cur.close()                
-
-    def update_round_status(self, guild, user, status, problems, timestamp):
-        query = f"""
-                    UPDATE lockout_ongoing_rounds 
-                    SET
-                    status = ?, 
-                    problems = ?,
-                    times = ?
-                    WHERE
-                    guild = ? AND users LIKE ? 
-                """
-        cur = self.conn.cursor()
-        cur.execute(query,
-                     (' '.join([str(x) for x in status]), ' '.join(problems), ' '.join([str(x) for x in timestamp]),
-                      guild, f"%{user}%"))
-        self.conn.commit()
-        cur.close()
-
-    def get_round_info(self, guild_id, users):
-        query = f'''
-                    SELECT * FROM lockout_ongoing_rounds
-                    WHERE
-                    guild = ? AND users LIKE ?
-                 '''
-        cur = self.conn.cursor()
-        cur.execute(query, (guild_id, f"%{users}%"))
-        data = cur.fetchone()
-        cur.close()
-        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times')
-        return Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10])
-
-    def check_if_user_in_ongoing_round(self, guild, user):
-        query = f'''
-                    SELECT * FROM lockout_ongoing_rounds
-                    WHERE
-                    users LIKE ? AND guild = ?
-                '''
-        cur = self.conn.cursor()
-        cur.execute(query, (f"%{user}%", guild))
-        data = cur.fetchall()
-        cur.close()
-        if len(data) > 0:
-            return True
-        return False
-
-    def delete_round(self, guild, user):
-        query = f'''
-                    DELETE FROM lockout_ongoing_rounds
-                    WHERE
-                    guild = ? AND users LIKE ?
-                '''
-        cur = self.conn.cursor()
-        cur.execute(query, (guild, f"%{user}%"))
-        self.conn.commit()
-        cur.close()    
-
-    def get_ongoing_rounds(self, guild):
-        query = f'''
-                    SELECT * FROM lockout_ongoing_rounds WHERE guild = ?
-                '''
-        cur = self.conn.cursor()
-        cur.execute(query, (guild,))
-        res = cur.fetchall()
-        cur.close()
-        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times')
-        return [Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10]) for data in res]
-
-    def get_recent_rounds(self, guild, user=None):
-        query = f'''
-                    SELECT * FROM lockout_finished_rounds 
-                    WHERE guild = ? AND users LIKE ?
-                    ORDER BY end_time DESC
-                '''
-        cur = self.conn.cursor()
-        cur.execute(query, (guild, '%' if user is None else f'%{user}%'))
-        res = cur.fetchall()
-        cur.close()
-        Round = namedtuple('Round', 'guild users rating points time problems status duration repeat times end_time')
-        return [Round(data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]) for data in res]
-
-    def close(self):
-        self.conn.close()
-
+    async def close(self) -> None:
+        if self.conn:
+            await self.conn.close()

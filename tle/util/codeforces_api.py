@@ -1,14 +1,14 @@
 import asyncio
-from collections import defaultdict, deque, namedtuple
 import functools
 import itertools
 import logging
 import time
-from typing import Any, Dict, Iterable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
+from collections import defaultdict, deque
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from typing import Any, NamedTuple
+
 import aiohttp
 from discord.ext import commands
-
-from tle.util import codeforces_common as cf_common
 
 # ruff: noqa: N815
 
@@ -19,36 +19,39 @@ GYM_BASE_URL = 'https://codeforces.com/gym/'
 PROFILE_BASE_URL = 'https://codeforces.com/profile/'
 ACMSGURU_BASE_URL = 'https://codeforces.com/problemsets/acmsguru/'
 GYM_ID_THRESHOLD = 100000
-DEFAULT_RATING = 800
+DEFAULT_RATING = 1500
 
 logger = logging.getLogger(__name__)
 
+
 class Rank(NamedTuple):
     """Codeforces rank."""
-    low: Optional[int]
-    high: Optional[int]
+
+    low: int | None
+    high: int | None
     title: str
-    title_abbr: Optional[str]
-    color_graph: Optional[str]
-    color_embed: Optional[int]
+    title_abbr: str | None
+    color_graph: str | None
+    color_embed: int | None
+
 
 RATED_RANKS = (
-    Rank(-10 ** 9, 1200, 'Newbie', 'N', '#CCCCCC', 0x808080),
+    Rank(-(10**9), 1200, 'Newbie', 'N', '#CCCCCC', 0x808080),
     Rank(1200, 1400, 'Pupil', 'P', '#77FF77', 0x008000),
-    Rank(1400, 1600, 'Specialist', 'S', '#77DDBB', 0x03a89e),
-    Rank(1600, 1900, 'Expert', 'E', '#AAAAFF', 0x0000ff),
-    Rank(1900, 2100, 'Candidate Master', 'CM', '#FF88FF', 0xaa00aa),
-    Rank(2100, 2300, 'Master', 'M', '#FFCC88', 0xff8c00),
-    Rank(2300, 2400, 'International Master', 'IM', '#FFBB55', 0xf57500),
-    Rank(2400, 2600, 'Grandmaster', 'GM', '#FF7777', 0xff3030),
-    Rank(2600, 3000, 'International Grandmaster', 'IGM', '#FF3333', 0xff0000),
-    Rank(3000, 4000, 'Legendary Grandmaster', 'LGM', '#AA0000', 0xcc0000),
-    Rank(4000, 10 ** 9, 'Tourist', 'T', '#330000', 0x000000)
+    Rank(1400, 1600, 'Specialist', 'S', '#77DDBB', 0x03A89E),
+    Rank(1600, 1900, 'Expert', 'E', '#AAAAFF', 0x0000FF),
+    Rank(1900, 2100, 'Candidate Master', 'CM', '#FF88FF', 0xAA00AA),
+    Rank(2100, 2300, 'Master', 'M', '#FFCC88', 0xFF8C00),
+    Rank(2300, 2400, 'International Master', 'IM', '#FFBB55', 0xF57500),
+    Rank(2400, 2600, 'Grandmaster', 'GM', '#FF7777', 0xFF3030),
+    Rank(2600, 3000, 'International Grandmaster', 'IGM', '#FF3333', 0xFF0000),
+    Rank(3000, 4000, 'Legendary Grandmaster', 'LGM', '#AA0000', 0xCC0000),
+    Rank(4000, 10**9, 'Tourist', 'T', '#330000', 0x000000),
 )
 UNRATED_RANK = Rank(None, None, 'Unrated', None, None, None)
 
 
-def rating2rank(rating: Optional[int]) -> Rank:
+def rating2rank(rating: int | None) -> Rank:
     """Returns the rank corresponding to the given rating."""
     if rating is None:
         return UNRATED_RANK
@@ -61,17 +64,19 @@ def rating2rank(rating: Optional[int]) -> Rank:
 
 # Data classes
 
+
 class User(NamedTuple):
     """Codeforces user."""
+
     handle: str
-    firstName: Optional[str]
-    lastName: Optional[str]
-    country: Optional[str]
-    city: Optional[str]
-    organization: Optional[str]
+    firstName: str | None
+    lastName: str | None
+    country: str | None
+    city: str | None
+    organization: str | None
     contribution: int
-    rating: Optional[int]
-    maxRating: Optional[int]
+    rating: int | None
+    maxRating: int | None
     lastOnlineTimeSeconds: int
     registrationTimeSeconds: int
     friendOfCount: int
@@ -93,8 +98,16 @@ class User(NamedTuple):
         return f'{PROFILE_BASE_URL}{self.handle}'
 
 
+def fix_urls(user: 'User') -> 'User':
+    """Fix protocol-relative URLs in user's titlePhoto."""
+    if user.titlePhoto.startswith('//'):
+        user = user._replace(titlePhoto='https:' + user.titlePhoto)
+    return user
+
+
 class RatingChange(NamedTuple):
     """Codeforces rating change."""
+
     contestId: int
     contestName: str
     handle: str
@@ -103,20 +116,20 @@ class RatingChange(NamedTuple):
     oldRating: int
     newRating: int
 
+
 class Contest(NamedTuple):
     """Codeforces contest."""
+
     id: int
     name: str
-    startTimeSeconds: Optional[int]
-    durationSeconds: Optional[int]
+    startTimeSeconds: int | None
+    durationSeconds: int | None
     type: str
     phase: str
-    preparedBy: Optional[str]
-
-    PHASES = 'BEFORE CODING PENDING_SYSTEM_TEST SYSTEM_TEST FINISHED'.split()
+    preparedBy: str | None
 
     @property
-    def end_time(self) -> Optional[int]:
+    def end_time(self) -> int | None:
         """Returns the end time of the contest."""
         if self.startTimeSeconds is None or self.durationSeconds is None:
             return None
@@ -136,37 +149,57 @@ class Contest(NamedTuple):
 
     def matches(self, markers: Iterable[str]) -> bool:
         """Returns whether the contest matches any of the given markers."""
+
         def filter_and_normalize(s: str) -> str:
             return ''.join(x for x in s.lower() if x.isalnum())
-        return any(filter_and_normalize(marker) in filter_and_normalize(self.name) for marker in markers)
+
+        return any(
+            filter_and_normalize(marker) in filter_and_normalize(self.name)
+            for marker in markers
+        )
+
 
 class Member(NamedTuple):
     """Codeforces party member."""
+
     handle: str
+
 
 class Party(NamedTuple):
     """Codeforces party."""
-    contestId: Optional[int]
-    members: List[Member]
-    participantType: str
-    teamId: Optional[int]
-    teamName: Optional[str]
-    ghost: bool
-    room: Optional[int]
-    startTimeSeconds: Optional[int]
 
-    PARTICIPANT_TYPES = ('CONTESTANT', 'PRACTICE', 'VIRTUAL', 'MANAGER', 'OUT_OF_COMPETITION')
+    contestId: int | None
+    members: list[Member]
+    participantType: str
+    teamId: int | None
+    teamName: str | None
+    ghost: bool
+    room: int | None
+    startTimeSeconds: int | None
+
+
+CONTEST_PHASES = 'BEFORE CODING PENDING_SYSTEM_TEST SYSTEM_TEST FINISHED'.split()
+
+PARTICIPANT_TYPES = (
+    'CONTESTANT',
+    'PRACTICE',
+    'VIRTUAL',
+    'MANAGER',
+    'OUT_OF_COMPETITION',
+)
+
 
 class Problem(NamedTuple):
     """Codeforces problem."""
-    contestId: Optional[int]
-    problemsetName: Optional[str]
+
+    contestId: int | None
+    problemsetName: str | None
     index: str
     name: str
     type: str
-    points: Optional[float]
-    rating: Optional[int]
-    tags: List[str]
+    points: float | None
+    rating: int | None
+    tags: list[str]
 
     @property
     def contest_identifier(self) -> str:
@@ -177,7 +210,9 @@ class Problem(NamedTuple):
     def url(self) -> str:
         """Returns the URL of the problem."""
         if self.contestId is None:
-            assert self.problemsetName == 'acmsguru', f'Unknown problemset {self.problemsetName}'
+            assert self.problemsetName == 'acmsguru', (
+                f'Unknown problemset {self.problemsetName}'
+            )
             return f'{ACMSGURU_BASE_URL}problem/99999/{self.index}'
         base = CONTEST_BASE_URL if self.contestId < GYM_ID_THRESHOLD else GYM_BASE_URL
         return f'{base}{self.contestId}/problem/{self.index}'
@@ -186,7 +221,7 @@ class Problem(NamedTuple):
         """Returns whether the problem has metadata."""
         return self.contestId is not None and self.rating is not None
 
-    def _matching_tags_dict(self, match_tags: Iterable[str]) -> Dict[str, List[str]]:
+    def _matching_tags_dict(self, match_tags: Iterable[str]) -> dict[str, list[str]]:
         """Returns a dict with matching tags."""
         tags = defaultdict(list)
         for match_tag in match_tags:
@@ -205,47 +240,57 @@ class Problem(NamedTuple):
         match_tags = set(match_tags)
         return len(self._matching_tags_dict(match_tags)) > 0
 
-    def get_matched_tags(self, match_tags: Iterable[str]) -> List[str]:
+    def get_matched_tags(self, match_tags: Iterable[str]) -> list[str]:
         """Returns a list of tags that match any of the given tags."""
         return [
-            tag for tags in self._matching_tags_dict(match_tags).values()
+            tag
+            for tags in self._matching_tags_dict(match_tags).values()
             for tag in tags
         ]
 
+
 class ProblemStatistics(NamedTuple):
     """Codeforces problem statistics."""
-    contestId: Optional[int]
+
+    contestId: int | None
     index: str
     solvedCount: int
 
+
 class Submission(NamedTuple):
     """Codeforces submission for a problem."""
+
     id: int
-    contestId: Optional[int]
+    contestId: int | None
     problem: Problem
     author: Party
     programmingLanguage: str
-    verdict: Optional[str]
+    verdict: str | None
     creationTimeSeconds: int
     relativeTimeSeconds: int
 
+
 class RanklistRow(NamedTuple):
     """Codeforces ranklist row."""
+
     party: Party
     rank: int
     points: float
     penalty: int
-    problemResults: List['ProblemResult']
+    problemResults: list['ProblemResult']
+
 
 class ProblemResult(NamedTuple):
     """Codeforces problem result."""
+
     points: float
-    penalty: Optional[int]
+    penalty: int | None
     rejectedAttemptCount: int
     type: str
-    bestSubmissionTimeSeconds: Optional[int]
+    bestSubmissionTimeSeconds: int | None
 
-def make_from_dict(namedtuple_cls, dict_):
+
+def make_from_dict(namedtuple_cls: Any, dict_: dict[str, Any]) -> Any:
     """Creates a namedtuple from a subset of values in a dict."""
     field_vals = [dict_.get(field) for field in namedtuple_cls._fields]
     return namedtuple_cls._make(field_vals)
@@ -253,17 +298,22 @@ def make_from_dict(namedtuple_cls, dict_):
 
 # Error classes
 
+
 class CodeforcesApiError(commands.CommandError):
     """Base class for all API related errors."""
 
-    def __init__(self, message: Optional[str] = None):
-        super().__init__(message or 'Codeforces API error. There is nothing you or the Admins of the Discord server can do to fix it. We need to wait until Mike does his job.')
+    def __init__(self, message: str | None = None):
+        super().__init__(
+            message
+            or 'Codeforces API error. There is nothing you or the Admins of the '
+            'Discord server can do to fix it. We need to wait until Mike does his job.'
+        )
 
 
 class TrueApiError(CodeforcesApiError):
     """An error originating from a valid response of the API."""
 
-    def __init__(self, comment: str, message: Optional[str] = None):
+    def __init__(self, comment: str, message: str | None = None):
         super().__init__(message)
         self.comment = comment
 
@@ -271,7 +321,7 @@ class TrueApiError(CodeforcesApiError):
 class ClientError(CodeforcesApiError):
     """An error caused by a request to the API failing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('Error connecting to Codeforces API')
 
 
@@ -318,7 +368,7 @@ class RatingChangesUnavailableError(TrueApiError):
 
 # Codeforces API query methods
 
-_session: aiohttp.ClientSession = None
+_session: aiohttp.ClientSession | None = None
 
 
 async def initialize() -> None:
@@ -333,13 +383,13 @@ def _bool_to_str(value: bool) -> str:
     raise TypeError(f'Expected bool, got {value} of type {type(value)}')
 
 
-def cf_ratelimit(f):
+def cf_ratelimit(f: Callable[..., Any]) -> Callable[..., Any]:
     tries = 3
     per_second = 1
-    last = deque([0.0]*per_second)
+    last = deque([0.0] * per_second)
 
     @functools.wraps(f)
-    async def wrapped(*args, **kwargs):
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
         for i in itertools.count():
             now = time.time()
 
@@ -356,7 +406,7 @@ def cf_ratelimit(f):
             try:
                 return await f(*args, **kwargs)
             except (ClientError, CallLimitExceededError) as e:
-                logger.info(f'Try {i+1}/{tries} at query failed.')
+                logger.info(f'Try {i + 1}/{tries} at query failed.')
                 logger.info(repr(e))
                 if i < tries - 1:
                     logger.info('Retrying...')
@@ -364,21 +414,25 @@ def cf_ratelimit(f):
                     logger.info('Aborting.')
                     raise e
         raise AssertionError('Unreachable')
+
     return wrapped
 
 
 @cf_ratelimit
-async def _query_api(path: str, data: Any=None):
+async def _query_api(path: str, data: Any = None) -> Any:
     url = API_BASE_URL + path
     try:
         logger.info(f'Querying CF API at {url} with {data}')
         # Explicitly state encoding (though aiohttp accepts gzip by default)
         headers = {'Accept-Encoding': 'gzip'}
-        async with _session.get(url, params=data, headers=headers) as resp:
+        assert _session is not None, 'Session not initialized. Call initialize() first.'
+        async with _session.post(url, data=data, headers=headers) as resp:
             try:
                 respjson = await resp.json()
             except aiohttp.ContentTypeError:
-                logger.warning(f'CF API did not respond with JSON, status {resp.status}.')
+                logger.warning(
+                    f'CF API did not respond with JSON, status {resp.status}.'
+                )
                 raise CodeforcesApiError
             if resp.status == 200:
                 return respjson['result']
@@ -394,7 +448,7 @@ async def _query_api(path: str, data: Any=None):
 
 class contest:
     @staticmethod
-    async def list(*, gym: Optional[bool] = None) -> List[Contest]:
+    async def to_list(*, gym: bool | None = None) -> list[Contest]:
         """Returns a list of contests."""
         params = {}
         if gym is not None:
@@ -403,7 +457,7 @@ class contest:
         return [make_from_dict(Contest, contest_dict) for contest_dict in resp]
 
     @staticmethod
-    async def ratingChanges(*, contest_id: Any) -> List[RatingChange]:
+    async def ratingChanges(*, contest_id: Any) -> list[RatingChange]:
         """Returns a list of rating changes for a contest."""
         params = {'contestId': contest_id}
         try:
@@ -420,30 +474,23 @@ class contest:
     async def standings(
         *,
         contest_id: Any,
-        from_: Optional[int] = None,
-        count: Optional[int] = None,
-        handles: Optional[List[str]] = None,
-        room: Optional[Any] = None,
-        show_unofficial: Optional[bool] = None,
-    ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
+        from_: int | None = None,
+        count: int | None = None,
+        handles: list[str] | None = None,
+        room: Any | None = None,
+        show_unofficial: bool | None = None,
+    ) -> tuple[Contest, list[Problem], list[RanklistRow]]:
         params = {'contestId': contest_id}
-        ## Comment (denjell): Current API does not allow for any other param than contestId
-        
         if from_ is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got from')
-            # params['from'] = from_
+            params['from'] = from_
         if count is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got count')
-            # params['count'] = count
+            params['count'] = count
         if handles is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got handles')
-            # params['handles'] = ';'.join(handles)
+            params['handles'] = ';'.join(handles)
         if room is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got room')
-            # params['room'] = room
+            params['room'] = room
         if show_unofficial is not None:
-            logger.error(f'contest.standings does not allow params other than contest_id, got showUnofficial')
-            # params['showUnofficial'] = _bool_to_str(show_unofficial)
+            params['showUnofficial'] = _bool_to_str(show_unofficial)
         try:
             resp = await _query_api('contest.standings', params)
         except TrueApiError as e:
@@ -451,13 +498,18 @@ class contest:
                 raise ContestNotFoundError(e.comment, contest_id)
             raise
         contest_ = make_from_dict(Contest, resp['contest'])
-        problems = [make_from_dict(Problem, problem_dict) for problem_dict in resp['problems']]
+        problems = [
+            make_from_dict(Problem, problem_dict) for problem_dict in resp['problems']
+        ]
         for row in resp['rows']:
-            row['party']['members'] = [make_from_dict(Member, member)
-                                       for member in row['party']['members']]
+            row['party']['members'] = [
+                make_from_dict(Member, member) for member in row['party']['members']
+            ]
             row['party'] = make_from_dict(Party, row['party'])
-            row['problemResults'] = [make_from_dict(ProblemResult, problem_result)
-                                     for problem_result in row['problemResults']]
+            row['problemResults'] = [
+                make_from_dict(ProblemResult, problem_result)
+                for problem_result in row['problemResults']
+            ]
         ranklist = [make_from_dict(RanklistRow, row_dict) for row_dict in resp['rows']]
         return contest_, problems, ranklist
 
@@ -465,8 +517,8 @@ class contest:
 class problemset:
     @staticmethod
     async def problems(
-        *, tags=None, problemset_name=None
-    ) -> Tuple[List[Problem], List[ProblemStatistics]]:
+        *, tags: list[str] | None = None, problemset_name: str | None = None
+    ) -> tuple[list[Problem], list[ProblemStatistics]]:
         """Returns a list of problems."""
         params = {}
         if tags is not None:
@@ -474,18 +526,26 @@ class problemset:
         if problemset_name is not None:
             params['problemsetName'] = problemset_name
         resp = await _query_api('problemset.problems', params)
-        problems = [make_from_dict(Problem, problem_dict) for problem_dict in resp['problems']]
-        problemstats = [make_from_dict(ProblemStatistics, problemstat_dict) for problemstat_dict in
-                        resp['problemStatistics']]
+        problems = [
+            make_from_dict(Problem, problem_dict) for problem_dict in resp['problems']
+        ]
+        problemstats = [
+            make_from_dict(ProblemStatistics, problemstat_dict)
+            for problemstat_dict in resp['problemStatistics']
+        ]
         return problems, problemstats
 
-def user_info_chunkify(handles: Iterable[str]) -> Iterator[List[str]]:
+
+def user_info_chunkify(handles: Iterable[str]) -> Iterator[list[str]]:
     """Yields chunks of handles that can be queried with user.info."""
-    # Querying user.info using POST requests is limited to 10000 handles or 2**16
-    # bytes, so requests might need to be split into chunks
+    # Querying user.info using POST requests is nominally limited to 10000
+    # handles or 2**16 bytes, but in production those limits caused CF API
+    # failures for us. Deliberately kept well under the documented limits
+    # (2026-07-16); revisit now that _query_api uses POST if this needs
+    # loosening again, but confirm against real traffic before doing so.
     SIZE_LIMIT = 5000
     HANDLE_LIMIT = 500
-    chunk = []
+    chunk: list[str] = []
     size = 0
     for handle in handles:
         if size + len(handle) > SIZE_LIMIT or len(chunk) == HANDLE_LIMIT:
@@ -497,14 +557,17 @@ def user_info_chunkify(handles: Iterable[str]) -> Iterator[List[str]]:
     if chunk:
         yield chunk
 
+
 class user:
     @staticmethod
-    async def info(*, handles: Sequence[str]) -> List[User]:
+    async def info(*, handles: Sequence[str]) -> list[User]:
         """Returns a list of user info."""
         chunks = list(user_info_chunkify(handles))
         if len(chunks) > 1:
-            logger.warning(f'cf.info request with {len(handles)} handles,'
-            f'will be chunkified into {len(chunks)} requests.')
+            logger.warning(
+                f'cf.info request with {len(handles)} handles,'
+                f' will be chunkified into {len(chunks)} requests.'
+            )
 
         result = []
         count = 0
@@ -520,30 +583,43 @@ class user:
                 raise
             result += [make_from_dict(User, user_dict) for user_dict in resp]
             count += len(chunk)
-        logger.info(f"user.info was called for {count} entries and {len(result)} User objects could be created.")
-        return [cf_common.fix_urls(user) for user in result]
+        logger.info(
+            f'user.info was called for {count} entries and'
+            f' {len(result)} User objects could be created.'
+        )
+        return [fix_urls(user) for user in result]
 
     @staticmethod
-    def correct_rating_changes(*, resp):
-        adaptO = [1400, 900, 550, 300, 150, 50]
-        adaptN = [900, 550, 300, 150, 50, 0]
+    def correct_rating_changes(
+        *, resp: list[list[RatingChange]]
+    ) -> list[list[RatingChange]]:
+        """Adjusts rating-change history to approximate the modern rating
+        formula for contests predating it (legacy Codeforces rating system).
+        """
+        adapt_old = [1400, 900, 550, 300, 150, 50]
+        adapt_new = [900, 550, 300, 150, 50, 0]
         for r in resp:
-            if (len(r) > 0):
-                if (r[0].newRating <= 1200):
-                    for ind in range(0,(min(6, len(r)))):
-                        r[ind] = RatingChange(r[ind].contestId, r[ind].contestName, r[ind].handle, r[ind].rank, r[ind].ratingUpdateTimeSeconds, r[ind].oldRating+adaptO[ind], r[ind].newRating+adaptN[ind])
+            if len(r) > 0:
+                if r[0].newRating <= 1200:
+                    for ind in range(min(6, len(r))):
+                        r[ind] = r[ind]._replace(
+                            oldRating=r[ind].oldRating + adapt_old[ind],
+                            newRating=r[ind].newRating + adapt_new[ind],
+                        )
                 else:
-                    r[0] = RatingChange(r[0].contestId, r[0].contestName, r[0].handle, r[0].rank, r[0].ratingUpdateTimeSeconds, r[0].oldRating+1500, r[0].newRating)
+                    r[0] = r[0]._replace(oldRating=r[0].oldRating + 1500)
         for r in resp:
-            oldPerf = 0
-            for ind in range(0,len(r)):
-                r[ind] = RatingChange(r[ind].contestId, r[ind].contestName, r[ind].handle, r[ind].rank, r[ind].ratingUpdateTimeSeconds, oldPerf, r[ind].oldRating + 4*(r[ind].newRating-r[ind].oldRating))
-                oldPerf = r[ind].oldRating + 4*(r[ind].newRating-r[ind].oldRating)
+            old_perf = 0
+            for ind in range(len(r)):
+                r[ind] = r[ind]._replace(
+                    oldRating=old_perf,
+                    newRating=r[ind].oldRating + 4 * (r[ind].newRating - r[ind].oldRating),
+                )
+                old_perf = r[ind].oldRating + 4 * (r[ind].newRating - r[ind].oldRating)
         return resp
 
-
     @staticmethod
-    async def rating(*, handle: str):
+    async def rating(*, handle: str) -> list[RatingChange]:
         """Returns a list of rating changes for a user."""
         params = {'handle': handle}
         try:
@@ -554,10 +630,13 @@ class user:
             if 'should contain' in e.comment:
                 raise HandleInvalidError(e.comment, handle)
             raise
-        return [make_from_dict(RatingChange, ratingchange_dict) for ratingchange_dict in resp]
+        return [
+            make_from_dict(RatingChange, ratingchange_dict)
+            for ratingchange_dict in resp
+        ]
 
     @staticmethod
-    async def ratedList(*, activeOnly: bool = None) -> List[User]:
+    async def ratedList(*, activeOnly: bool | None = None) -> list[User]:
         """Returns a list of rated users."""
         params = {}
         if activeOnly is not None:
@@ -567,10 +646,10 @@ class user:
 
     @staticmethod
     async def status(
-        *, handle: str, from_: Optional[int] = None, count: Optional[int] = None
-    ) -> List[Submission]:
+        *, handle: str, from_: int | None = None, count: int | None = None
+    ) -> list[Submission]:
         """Returns a list of submissions for a user."""
-        params: Dict[str, Any] = {'handle': handle}
+        params: dict[str, Any] = {'handle': handle}
         if from_ is not None:
             params['from'] = from_
         if count is not None:
@@ -585,61 +664,69 @@ class user:
             raise
         for submission in resp:
             submission['problem'] = make_from_dict(Problem, submission['problem'])
-            submission['author']['members'] = [make_from_dict(Member, member)
-                                               for member in submission['author']['members']]
+            submission['author']['members'] = [
+                make_from_dict(Member, member)
+                for member in submission['author']['members']
+            ]
             submission['author'] = make_from_dict(Party, submission['author'])
         return [make_from_dict(Submission, submission_dict) for submission_dict in resp]
 
 
-async def _resolve_redirect(handle: str) -> Optional[str]:
+async def _resolve_redirect(handle: str) -> str | None:
     url = PROFILE_BASE_URL + handle
+    assert _session is not None, 'Session not initialized. Call initialize() first.'
     async with _session.head(url) as r:
         if r.status == 200:
             return handle
-        if r.status == 301 or r.status == 302:
+        if r.status in (301, 302):
             redirected = r.headers.get('Location')
-            if '/profile/' not in redirected:
+            if redirected is None or '/profile/' not in redirected:
                 # Ended up not on profile page, probably invalid handle
                 return None
-            return redirected.split('/profile/')[-1]
-        raise CodeforcesApiError(
-            f'Something went wrong trying to redirect {url}')
+            return str(redirected.split('/profile/')[-1])
+        raise CodeforcesApiError(f'Something went wrong trying to redirect {url}')
+
 
 async def _resolve_handle_to_new_user(
     handle: str,
-) -> Optional[User]:
+) -> User | None:
     new_handle = await _resolve_redirect(handle)
     if new_handle is None:
         return None
-    cf_user, = await user.info(handles=[new_handle])
+    (cf_user,) = await user.info(handles=[new_handle])
     return cf_user
 
 
-async def _resolve_handles(handles: Iterable[str]) -> Dict[str, Optional[User]]:
+async def _resolve_handles(handles: Iterable[str]) -> dict[str, User]:
     chunks = user_info_chunkify(handles)
 
-    resolved_handles: Dict[str, Optional[User]] = {}
-
+    resolved_handles: dict[str, User] = {}
     for handle_chunk in chunks:
         while handle_chunk:
             try:
                 cf_users = await user.info(handles=handle_chunk)
-
-                # CF API changed. We now get the new username from API
-                # If handle and cf_user.handle differ then the user used magic and needs fixing!
-                for handle, cf_user in zip(handle_chunk, cf_users):
-                    if handle != cf_user.handle:
+                # No failure, all handles resolve to users,
+                for handle, cf_user in zip(handle_chunk, cf_users, strict=False):
+                    if cf_user is not None:
                         resolved_handles[handle] = cf_user
                 break
             except HandleNotFoundError as e:
-                # Not sure if we still need this! Magic users should not run into it. 
-                # Will leave it for now.
-                # >> Handle resolution failed, fix the reported handle.
-                resolved_handles[e.handle] = await _resolve_handle_to_new_user(e.handle)
+                # Handle not found, drop it.
+                logger.warning(f'Handle {e.handle} not found, dropping it.')
                 handle_chunk.remove(e.handle)
     return resolved_handles
 
 
-async def resolve_redirects(handles: Iterable[str]) -> Dict[str, Optional[User]]:
+async def resolve_redirects(
+    handles: Iterable[str], skip_filter: bool = False
+) -> dict[str, User]:
     """Returns a mapping of handles to their resolved CF users."""
-    return await _resolve_handles(handles)
+    resolved_handles = await _resolve_handles(handles)
+    if skip_filter:
+        return resolved_handles
+
+    return {
+        handle: cf_user
+        for handle, cf_user in resolved_handles.items()
+        if cf_user is not None and handle != cf_user.handle
+    }

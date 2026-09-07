@@ -5,12 +5,7 @@ import discord
 from discord.ext import commands
 
 from tle import constants
-from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
-
-_STAR = '\N{WHITE MEDIUM STAR}'
-_STAR_ORANGE = 0xffaa10
-_STAR_THRESHOLD = 5
 
 
 class StarboardCogError(commands.CommandError):
@@ -18,41 +13,47 @@ class StarboardCogError(commands.CommandError):
 
 
 class Starboard(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.locks = {}
+        self.locks: dict[int, asyncio.Lock] = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
     @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload):
-        if str(payload.emoji) != _STAR or payload.guild_id is None:
+    async def on_raw_reaction_add(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        guild_id = payload.guild_id
+        if guild_id is None:
             return
-        res = cf_common.user_db.get_starboard(payload.guild_id)
-        if res is None:
+        emoji = str(payload.emoji)
+        entry = await self.bot.user_db.get_starboard_entry(guild_id, emoji)
+        if entry is None:
             return
-        starboard_channel_id = int(res[0])
+        channel_id, threshold, color = entry
         try:
-            await self.check_and_add_to_starboard(starboard_channel_id, payload)
+            await self.check_and_add_to_starboard(
+                channel_id, threshold, color, emoji, payload
+            )
         except StarboardCogError as e:
             self.logger.info(f'Failed to starboard: {e!r}')
 
     @commands.Cog.listener()
-    async def on_raw_message_delete(self, payload):
+    async def on_raw_message_delete(
+        self, payload: discord.RawMessageDeleteEvent
+    ) -> None:
         if payload.guild_id is None:
             return
-        res = cf_common.user_db.get_starboard(payload.guild_id)
-        if res is None:
-            return
-        starboard_channel_id = int(res[0])
-        if payload.channel_id != starboard_channel_id:
-            return
-        cf_common.user_db.remove_starboard_message(starboard_msg_id=payload.message_id)
-        self.logger.info(f'Removed message {payload.message_id} from starboard')
+        removed = await self.bot.user_db.remove_starboard_message(
+            starboard_msg_id=payload.message_id
+        )
+        if removed:
+            self.logger.info(
+                f'Removed starboard record for deleted message {payload.message_id}'
+            )
 
     @staticmethod
-    def prepare_embed(message):
-        # Adapted from https://github.com/Rapptz/RoboDanny/blob/rewrite/cogs/stars.py
-        embed = discord.Embed(color=_STAR_ORANGE, timestamp=message.created_at)
+    def prepare_embed(message: discord.Message, color: int) -> discord.Embed:
+        embed = discord.Embed(color=color, timestamp=message.created_at)
         embed.add_field(name='Channel', value=message.channel.mention)
         embed.add_field(name='Jump to', value=f'[Original]({message.jump_url})')
 
@@ -69,79 +70,149 @@ class Starboard(commands.Cog):
             if file.filename.lower().endswith(('png', 'jpeg', 'jpg', 'gif', 'webp')):
                 embed.set_image(url=file.url)
             else:
-                embed.add_field(name='Attachment', value=f'[{file.filename}]({file.url})', inline=False)
+                embed.add_field(
+                    name='Attachment',
+                    value=f'[{file.filename}]({file.url})',
+                    inline=False,
+                )
 
-        embed.set_footer(text=str(message.author), icon_url=message.author.avatar)
+        embed.set_footer(
+            text=str(message.author),
+            icon_url=message.author.display_avatar.url,
+        )
         return embed
 
-    async def check_and_add_to_starboard(self, starboard_channel_id, payload):
+    async def check_and_add_to_starboard(
+        self,
+        channel_id: int,
+        threshold: int,
+        color: int | None,
+        emoji: str,
+        payload: discord.RawReactionActionEvent,
+    ) -> None:
         guild = self.bot.get_guild(payload.guild_id)
-        starboard_channel = guild.get_channel(starboard_channel_id)
+        starboard_channel = guild.get_channel(channel_id)
         if starboard_channel is None:
             raise StarboardCogError('Starboard channel not found')
 
         channel = self.bot.get_channel(payload.channel_id)
         message = await channel.fetch_message(payload.message_id)
-        if ((message.type != discord.MessageType.default and message.type != discord.MessageType.reply)
-            or (len(message.content) == 0 and len(message.attachments) == 0)):
+        if message.type not in (
+            discord.MessageType.default,
+            discord.MessageType.reply,
+        ) or (not message.content and not message.attachments):
             raise StarboardCogError('Cannot starboard this message')
 
-        reaction_count = sum(reaction.count for reaction in message.reactions
-                             if str(reaction) == _STAR)
-        if reaction_count < _STAR_THRESHOLD:
+        count = sum(r.count for r in message.reactions if str(r) == emoji)
+        if count < threshold:
             return
-        lock = self.locks.get(payload.guild_id)
-        if lock is None:
-            self.locks[payload.guild_id] = lock = asyncio.Lock()
 
+        lock = self.locks.setdefault(payload.guild_id, asyncio.Lock())
         async with lock:
-            if cf_common.user_db.check_exists_starboard_message(message.id):
+            if await self.bot.user_db.check_exists_starboard_message(message.id, emoji):
                 return
-            embed = self.prepare_embed(message)
-            starboard_message = await starboard_channel.send(embed=embed)
-            cf_common.user_db.add_starboard_message(message.id, starboard_message.id, guild.id)
-            self.logger.info(f'Added message {message.id} to starboard (Last reaction by {payload.user_id})')
+            embed = self.prepare_embed(message, color or constants._DEFAULT_COLOR)
+            star_msg = await starboard_channel.send(embed=embed)
+            await self.bot.user_db.add_starboard_message(
+                message.id, star_msg.id, payload.guild_id, emoji
+            )
+            self.logger.info(f'Added message {message.id} to starboard under {emoji}')
 
-    @commands.group(brief='Starboard commands',
-                    invoke_without_command=True)
-    async def starboard(self, ctx):
+    @commands.hybrid_group(brief='Starboard commands', fallback='show')
+    async def starboard(self, ctx: commands.Context) -> None:
         """Group for commands involving the starboard."""
         await ctx.send_help(ctx.command)
 
-    @starboard.command(brief='Set starboard to current channel')
+    @starboard.command(brief='Add an emoji to starboard list')
     @commands.has_role(constants.TLE_ADMIN)
-    async def here(self, ctx):
-        """Set the current channel as starboard."""
-        res = cf_common.user_db.get_starboard(ctx.guild.id)
-        if res is not None:
-            raise StarboardCogError('The starboard channel is already set. Use `clear` before '
-                                    'attempting to set a different channel as starboard.')
-        cf_common.user_db.set_starboard(ctx.guild.id, ctx.channel.id)
-        await ctx.send(embed=discord_common.embed_success('Starboard channel set'))
+    async def add(
+        self,
+        ctx: commands.Context,
+        emoji: str,
+        threshold: int,
+        color: str | None = None,
+    ) -> None:
+        """Register an emoji with a reaction threshold and optional hex color."""
+        clr = int(color, 16) if color else constants._DEFAULT_COLOR
+        await self.bot.user_db.add_starboard_emoji(ctx.guild.id, emoji, threshold, clr)
+        await ctx.send(
+            embed=discord_common.embed_success(
+                f'Added {emoji}: threshold={threshold}, color={hex(clr)}'
+            )
+        )
 
-    @starboard.command(brief='Clear starboard settings')
+    @starboard.command(brief='Delete an emoji from starboard list')
     @commands.has_role(constants.TLE_ADMIN)
-    async def clear(self, ctx):
-        """Stop tracking starboard messages and remove the currently set starboard channel
-        from settings."""
-        cf_common.user_db.clear_starboard(ctx.guild.id)
-        cf_common.user_db.clear_starboard_messages_for_guild(ctx.guild.id)
-        await ctx.send(embed=discord_common.embed_success('Starboard channel cleared'))
+    async def delete(self, ctx: commands.Context, emoji: str) -> None:
+        """Unregister an emoji from starboard."""
+        await self.bot.user_db.remove_starboard_emoji(ctx.guild.id, emoji)
+        await self.bot.user_db.clear_starboard_channel(ctx.guild.id, emoji)
+        await ctx.send(embed=discord_common.embed_success(f'Removed {emoji}'))
+
+    @starboard.command(brief='Edit threshold for an emoji')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def edit_threshold(
+        self, ctx: commands.Context, emoji: str, threshold: int
+    ) -> None:
+        """Update reaction threshold for an emoji."""
+        await self.bot.user_db.update_starboard_threshold(
+            ctx.guild.id, emoji, threshold
+        )
+        await ctx.send(
+            embed=discord_common.embed_success(
+                f'Updated {emoji} threshold to {threshold}'
+            )
+        )
+
+    @starboard.command(brief='Edit embed color for an emoji')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def edit_color(self, ctx: commands.Context, emoji: str, color: str) -> None:
+        """Update embed color (hex) for an emoji."""
+        clr = int(color, 16)
+        await self.bot.user_db.update_starboard_color(ctx.guild.id, emoji, clr)
+        await ctx.send(
+            embed=discord_common.embed_success(f'Updated {emoji} color to {hex(clr)}')
+        )
+
+    @starboard.command(brief='Set starboard channel (and optional color) for an emoji')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def here(self, ctx: commands.Context, emoji: str) -> None:
+        """Set the channel and optional color for an emoji."""
+        await self.bot.user_db.set_starboard_channel(
+            ctx.guild.id, emoji, ctx.channel.id
+        )
+        msg = f'Set {emoji} channel to {ctx.channel.mention}'
+        await ctx.send(embed=discord_common.embed_success(msg))
+
+    @starboard.command(brief='Clear starboard channel for an emoji')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def clear(self, ctx: commands.Context, emoji: str) -> None:
+        """Remove the starboard channel (and color) setting for an emoji."""
+        await self.bot.user_db.clear_starboard_channel(ctx.guild.id, emoji)
+        await ctx.send(
+            embed=discord_common.embed_success(f'Cleared channel for {emoji}')
+        )
 
     @starboard.command(brief='Remove a message from starboard')
     @commands.has_role(constants.TLE_ADMIN)
-    async def remove(self, ctx, original_message_id: int):
+    async def remove(
+        self, ctx: commands.Context, emoji: str, original_message_id: int
+    ) -> None:
         """Remove a particular message from the starboard database."""
-        rc = cf_common.user_db.remove_starboard_message(original_msg_id=original_message_id)
+        rc = await self.bot.user_db.remove_starboard_message(
+            original_msg_id=original_message_id, emoji=emoji
+        )
         if rc:
             await ctx.send(embed=discord_common.embed_success('Successfully removed'))
         else:
-            await ctx.send(embed=discord_common.embed_alert('Not found in database'))
+            await ctx.send(embed=discord_common.embed_alert('Not found'))
 
     @discord_common.send_error_if(StarboardCogError)
-    async def cog_command_error(self, ctx, error):
+    async def cog_command_error(
+        self, ctx: commands.Context, error: commands.CommandError
+    ) -> None:
         pass
 
 
-async def setup(bot):
+async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Starboard(bot))
