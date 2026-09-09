@@ -349,8 +349,14 @@ class Handles(commands.Cog):
     @commands.has_role(constants.TLE_ADMIN)
     async def _updatestatus(self, ctx: commands.Context) -> None:
         gid = ctx.guild.id
-        members = await discord_common.fetch_members(ctx.guild)
-        active_ids = [m.id for m in members]
+        # update_status only ever touches rows that already exist, so it is
+        # enough to check which of the registered users are still in the
+        # guild -- which we can do without the Members intent.
+        user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(gid)
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (user_id for user_id, _ in user_id_handle_pairs)
+        )
+        active_ids = list(members_by_id)
         await self.bot.user_db.reset_status(gid)
         rc = 0
         for chunk in paginator.chunkify(active_ids, 100):
@@ -378,16 +384,25 @@ class Handles(commands.Cog):
             user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(
                 guild.id
             )
-            current_member_ids = {
-                m.id for m in await discord_common.fetch_members(guild)
-            }
+            members_by_id = await discord_common.fetch_members_by_ids(
+                guild, (user_id for user_id, _ in user_id_handle_pairs)
+            )
             to_set_inactive += [
                 (guild.id, user_id)
                 for user_id, _ in user_id_handle_pairs
-                if user_id not in current_member_ids
+                if user_id not in members_by_id
             ]
             if await self.bot.user_db.has_auto_role_update_enabled(guild.id):
-                await self._update_ranks_all(guild)
+                # A guild with no registered handles or without the rank
+                # roles set up raises here; that must not abort the sweep
+                # for the remaining guilds, nor skip set_inactive below.
+                try:
+                    await self._update_ranks_all(guild, members_by_id)
+                except Exception:
+                    self.logger.warning(
+                        f'Rank sync failed for guild {guild.id}, continuing.',
+                        exc_info=True,
+                    )
         await self.bot.user_db.set_inactive(to_set_inactive)
 
     @events.listener_spec(
@@ -777,7 +792,9 @@ class Handles(commands.Cog):
             if arg == "+all":
                 showall = True
 
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (int(user_id) for user_id, _ in res)
+        )
         rankings = []
         index = 0
         for user_id, score in res:
@@ -860,7 +877,9 @@ class Handles(commands.Cog):
             else:
                 raise HandleCogError(f'Tuple size {len(entry)} for entry {entry[0]}')
         
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (int(user_id) for user_id in res)
+        )
         rankings = []
         index = 0
         cache = self.bot.cf_cache.rating_changes_cache
@@ -913,7 +932,9 @@ class Handles(commands.Cog):
         """
         country_list = [country.title() for country in countries.split()]
         res = await self.bot.user_db.get_cf_users_for_guild(ctx.guild.id)
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (user_id for user_id, _ in res)
+        )
         users = [
             (members_by_id.get(user_id), cf_user.handle, cf_user.rating)
             for user_id, cf_user in res
@@ -956,7 +977,9 @@ class Handles(commands.Cog):
             key=lambda p: p[1].rating if p[1].rating is not None else -1,
             reverse=True,
         )
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (user_id for user_id, _ in user_id_cf_user_pairs)
+        )
         rows = []
         author_idx = None
         for user_id, cf_user in user_id_cf_user_pairs:
@@ -998,17 +1021,30 @@ class Handles(commands.Cog):
         buffer.seek(0)
         await ctx.send(msg, file=discord.File(buffer, 'handles.png'))
 
-    async def _update_ranks_all(self, guild: discord.Guild) -> None:
+    async def _update_ranks_all(
+        self,
+        guild: discord.Guild,
+        members_by_id: dict[int, discord.Member] | None = None,
+    ) -> None:
         """For each member in the guild, fetches their current ratings and
         updates their role if required.
         """
         res = await self.bot.user_db.get_handles_for_guild(guild.id)
-        await self._update_ranks(guild, res)
+        await self._update_ranks(guild, res, members_by_id)
 
     async def _update_ranks(
-        self, guild: discord.Guild, res: builtins.list[tuple[int, str]]
+        self,
+        guild: discord.Guild,
+        res: builtins.list[tuple[int, str]],
+        members_by_id: dict[int, discord.Member] | None = None,
     ) -> None:
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(guild)}
+        # Callers that already resolved these users can pass them in; without
+        # the Members intent resolving them costs gateway/REST round trips,
+        # so it's worth not doing twice.
+        if members_by_id is None:
+            members_by_id = await discord_common.fetch_members_by_ids(
+                guild, (user_id for user_id, _ in res)
+            )
         member_handles = [
             (members_by_id.get(user_id), handle) for user_id, handle in res
         ]
@@ -1053,8 +1089,15 @@ class Handles(commands.Cog):
         """Make an embed containing a list of rank changes and top rating
         increases for the members of this guild.
         """
-        user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(guild.id)
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(guild)}
+        all_pairs = await self.bot.user_db.get_handles_for_guild(guild.id)
+        user_id_handle_pairs = [
+            (user_id, handle)
+            for user_id, handle in all_pairs
+            if handle in change_by_handle
+        ]
+        members_by_id = await discord_common.fetch_members_by_ids(
+            guild, (user_id for user_id, _ in user_id_handle_pairs)
+        )
         member_handle_pairs = [
             (members_by_id.get(user_id), handle)
             for user_id, handle in user_id_handle_pairs
@@ -1406,13 +1449,29 @@ class Handles(commands.Cog):
         processed_count = 0
         http_failure_count = 0
 
+        # Fetched once up front to avoid issues if members leave/join during
+        # processing. This is the one command that genuinely needs the full
+        # member list -- it grandfathers members who never registered a
+        # handle, so there is no set of user ids we could resolve instead.
+        # Discord gates listing a guild's members behind the privileged
+        # Members intent, which this bot deliberately does not request.
+        try:
+            members_to_process = [
+                member async for member in guild.fetch_members(limit=None)
+            ]
+        except (discord.ClientException, discord.Forbidden):
+            raise HandleCogError(
+                'This command has to list every member of the server, which'
+                ' Discord only permits with the privileged Members intent.'
+                ' This bot runs without that intent, so `;handle grandfather`'
+                ' is unavailable. Assign the Trusted role manually, or enable'
+                ' `Intents.members` in `tle/__main__.py` and in the Discord'
+                ' developer portal.'
+            )
+
         status_message = await ctx.send(
             'Processing members for grandfathering Trusted...'
         )
-
-        # Fetched once up front to avoid issues if members leave/join during
-        # processing.
-        members_to_process = await discord_common.fetch_members(guild)
 
         for i, member in enumerate(members_to_process):
             processed_count += 1

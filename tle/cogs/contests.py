@@ -773,8 +773,15 @@ class Contests(commands.Cog):
     ) -> discord.Embed:
         """Make an embed containing a list of rank changes and rating changes for ratedvc participants."""  # noqa: E501
         contest = self.bot.cf_cache.contest_cache.get_contest(contest_id)
-        user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(guild.id)
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(guild)}
+        all_pairs = await self.bot.user_db.get_handles_for_guild(guild.id)
+        user_id_handle_pairs = [
+            (user_id, handle)
+            for user_id, handle in all_pairs
+            if handle in change_by_handle
+        ]
+        members_by_id = await discord_common.fetch_members_by_ids(
+            guild, (int(user_id) for user_id, _ in user_id_handle_pairs)
+        )
         member_handle_pairs = [
             (members_by_id.get(int(user_id)), handle)
             for user_id, handle in user_id_handle_pairs

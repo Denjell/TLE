@@ -1246,10 +1246,12 @@ class Dueling(commands.Cog):
     @duel.command(brief='Show duelists')
     async def ranklist(self, ctx: commands.Context) -> None:
         """Show the list of duelists with their duel rating."""
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        duelists = await self.bot.user_db.get_duelists(ctx.guild.id)
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (user_id for user_id, _ in duelists)
+        )
         user_pairs = [
-            (members_by_id.get(user_id), rating)
-            for user_id, rating in await self.bot.user_db.get_duelists(ctx.guild.id)
+            (members_by_id.get(user_id), rating) for user_id, rating in duelists
         ]
         users = [
             (

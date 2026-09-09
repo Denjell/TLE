@@ -703,7 +703,9 @@ class Training(commands.Cog):
         """Show a list of fastest solves within a training session for each rating."""
         res = await self.bot.user_db.train_get_fastest_solves()
 
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (int(user_id) for user_id, _, _ in res)
+        )
         rankings = []
         index = 0
         for user_id, rating, time in res:

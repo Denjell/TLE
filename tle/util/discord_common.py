@@ -2,7 +2,7 @@ import asyncio
 import functools
 import logging
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import discord
@@ -91,15 +91,50 @@ async def fetch_member(guild: discord.Guild, user_id: int) -> discord.Member | N
         return None
 
 
-async def fetch_members(guild: discord.Guild) -> list[discord.Member]:
-    """Returns all members of the guild via paginated REST calls.
+async def fetch_members_by_ids(
+    guild: discord.Guild, user_ids: Iterable[int]
+) -> dict[int, discord.Member]:
+    """Resolves the given user ids to guild members, as `{id: member}`.
 
-    Like `fetch_member`, this needs no privileged intent, unlike relying on
-    `Guild.members`/`Guild.chunk()`, which depend on the gateway-populated
-    cache. Slower than the cache and subject to normal rate limits, so
-    avoid calling this in hot paths.
+    Ids belonging to users who have left the guild are simply absent from
+    the result.
+
+    Without the privileged Members intent we can neither rely on the
+    gateway-populated member cache nor list the guild's members
+    (`Guild.fetch_members` / `Guild.chunk` both require that intent).
+    Requesting *specific* ids is allowed though, so this asks the gateway
+    for them in batches of 100 via `Guild.query_members`, and falls back to
+    one REST call per id if that request fails.
     """
-    return [member async for member in guild.fetch_members(limit=None)]
+    ids = list(dict.fromkeys(user_ids))  # de-duplicate, keep order
+    if not ids:
+        return {}
+
+    resolved: dict[int, discord.Member] = {}
+    pending: list[int] = []
+    for user_id in ids:
+        member = guild.get_member(user_id)
+        if member is not None:
+            resolved[user_id] = member
+        else:
+            pending.append(user_id)
+
+    for i in range(0, len(pending), 100):
+        chunk = pending[i : i + 100]
+        try:
+            for member in await guild.query_members(user_ids=chunk, limit=100):
+                resolved[member.id] = member
+        except (discord.ClientException, discord.HTTPException, asyncio.TimeoutError):
+            logger.warning(
+                f'query_members failed for {len(chunk)} ids in guild {guild.id},'
+                ' falling back to individual fetches.',
+                exc_info=True,
+            )
+            for user_id in chunk:
+                member = await fetch_member(guild, user_id)
+                if member is not None:
+                    resolved[user_id] = member
+    return resolved
 
 
 def send_error_if(*error_cls: type[Exception]) -> Callable[..., Any]:
@@ -179,14 +214,21 @@ async def presence(bot: Any) -> None:
         if not guilds:
             return
         guild = random.choice(guilds)
-        members = await fetch_members(guild)
-        eligible = [m for m in members if not has_role(m, constants.TLE_PURGATORY)]
-        if not eligible:
+        # Without the Members intent we can't enumerate the guild, so pick
+        # from the users who registered a handle instead.
+        user_ids = [
+            user_id for user_id, _ in await bot.user_db.get_handles_for_guild(guild.id)
+        ]
+        if not user_ids:
             return
-        target = random.choice(eligible)
-        await bot.change_presence(
-            activity=discord.Game(name=f'{target.display_name} orz')
-        )
+        random.shuffle(user_ids)
+        for user_id in user_ids[:10]:
+            target = await fetch_member(guild, user_id)
+            if target is not None and not has_role(target, constants.TLE_PURGATORY):
+                await bot.change_presence(
+                    activity=discord.Game(name=f'{target.display_name} orz')
+                )
+                return
 
     presence_task.start()
 

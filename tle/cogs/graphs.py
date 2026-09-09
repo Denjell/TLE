@@ -909,7 +909,10 @@ class Graphs(commands.Cog):
     @plot.command(brief='Show server rating distribution')
     async def distrib(self, ctx: commands.Context) -> None:
         """Plots rating distribution of users in this server"""
-        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
+        res = await self.bot.user_db.get_cf_users_for_guild(ctx.guild.id)
+        members_by_id = await discord_common.fetch_members_by_ids(
+            ctx.guild, (int(user_id) for user_id, _ in res)
+        )
 
         def in_purgatory(userid: int) -> bool:
             member = members_by_id.get(int(userid))
@@ -917,7 +920,6 @@ class Graphs(commands.Cog):
                 member, constants.TLE_PURGATORY
             )
 
-        res = await self.bot.user_db.get_cf_users_for_guild(ctx.guild.id)
         ratings = [
             cf_user.rating
             for user_id, cf_user in res
