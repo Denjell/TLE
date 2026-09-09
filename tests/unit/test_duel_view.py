@@ -14,6 +14,7 @@ def _make_view(timeout=300):
     view = DuelChallengeView(
         bot=bot,
         duelid=42,
+        guild_id=555,
         challenger_id=1001,
         challengee_id=2002,
         problem_name='A. Test Problem',
@@ -36,6 +37,7 @@ class TestDuelChallengeViewInit:
     async def test_initialization_stores_state(self):
         view = _make_view()
         assert view.duelid == 42
+        assert view.guild_id == 555
         assert view.challenger_id == 1001
         assert view.challengee_id == 2002
         assert view.problem_name == 'A. Test Problem'
@@ -177,7 +179,7 @@ class TestDeclineButton:
 
         await view.decline_button.callback(interaction)
 
-        view.bot.user_db.cancel_duel.assert_awaited_once_with(42, Duel.DECLINED)
+        view.bot.user_db.cancel_duel.assert_awaited_once_with(42, 555, Duel.DECLINED)
         interaction.response.edit_message.assert_awaited_once()
         for item in view.children:
             assert item.disabled is True
@@ -238,7 +240,7 @@ class TestWithdrawButton:
 
         await view.withdraw_button.callback(interaction)
 
-        view.bot.user_db.cancel_duel.assert_awaited_once_with(42, Duel.WITHDRAWN)
+        view.bot.user_db.cancel_duel.assert_awaited_once_with(42, 555, Duel.WITHDRAWN)
         interaction.response.edit_message.assert_awaited_once()
         for item in view.children:
             assert item.disabled is True
@@ -276,7 +278,7 @@ class TestOnTimeout:
         for item in view.children:
             assert item.disabled is True
         message.edit.assert_awaited_once_with(view=view)
-        view.bot.user_db.cancel_duel.assert_awaited_once_with(42, Duel.EXPIRED)
+        view.bot.user_db.cancel_duel.assert_awaited_once_with(42, 555, Duel.EXPIRED)
         message.channel.send.assert_awaited_once()
 
     async def test_timeout_no_message(self):

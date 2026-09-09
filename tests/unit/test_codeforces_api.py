@@ -260,14 +260,20 @@ class TestUserInfoChunkify:
         assert len(chunks) == 0
 
     def test_handle_limit(self):
-        # Use very short handles so size limit doesn't kick in first
-        handles = [f'u{i}' for i in range(10_001)]
+        # Use very short handles so size limit doesn't kick in first.
+        # HANDLE_LIMIT is deliberately kept well under the CF API's
+        # documented 10000 (see the comment on user_info_chunkify) after
+        # production failures with larger batches, so this asserts our
+        # current (tighter) limit rather than the documented maximum.
+        handles = [f'u{i}' for i in range(1001)]
         chunks = list(user_info_chunkify(handles))
-        assert len(chunks) == 2
-        assert len(chunks[0]) == 10_000
+        assert len(chunks) == 3
+        assert len(chunks[0]) == 500
 
     def test_size_limit(self):
-        # Each handle is about 100 chars, 2^16 = 65536 bytes
+        # Each handle is about 100 chars; SIZE_LIMIT is deliberately kept
+        # well under the CF API's documented 2^16 bytes (see the comment on
+        # user_info_chunkify).
         handles = ['x' * 100 for _ in range(1000)]
         chunks = list(user_info_chunkify(handles))
         assert len(chunks) > 1

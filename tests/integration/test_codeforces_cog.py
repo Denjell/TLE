@@ -144,8 +144,11 @@ class TestValidateGitgudStatus:
         await bot.user_db.new_challenge(
             12345, datetime.datetime.now().timestamp(), p, 0
         )
+        # Our fork splits the active-challenge check out into its own method
+        # (_check_no_active_challenge); _validate_gitgud_status only covers
+        # delta validation.
         with pytest.raises(CodeforcesCogError, match='active challenge'):
-            await cog._validate_gitgud_status(ctx, delta=0)
+            await cog._check_no_active_challenge(ctx)
 
     async def test_delta_none_skips_delta_checks(self, cog_env):
         cog, ctx, _, _ = cog_env
@@ -160,7 +163,7 @@ class TestGitgud:
     async def test_creates_challenge_and_sends_embed(self, cog_env):
         cog, ctx, bot, problems = cog_env
         problem = problems[0]
-        await cog._gitgud(ctx, 'tourist', problem, 0)
+        await cog._gitgud(ctx, 'tourist', problem, 0, False)
 
         # Should have sent a message with embed
         ctx.send.assert_awaited_once()
@@ -189,6 +192,9 @@ class TestGimme:
         mock_cf_common.is_contest_writer.return_value = False
         mock_cf_common.user_guard = MagicMock(side_effect=lambda **kwargs: lambda f: f)
         mock_cf_common.active_groups = {}
+        # gimme also filters by date range (our fork's addition); default to
+        # "no filtering".
+        mock_cf_common.parse_daterange.return_value = (0, 10**10)
 
         # Mock cf.user.status — return no solved submissions
         mock_cf.user.status = AsyncMock(return_value=[])
@@ -215,6 +221,9 @@ class TestGimme:
         mock_cf_common.is_contest_writer.return_value = False
         mock_cf_common.user_guard = MagicMock(side_effect=lambda **kwargs: lambda f: f)
         mock_cf_common.active_groups = {}
+        # gimme also filters by date range (our fork's addition); default to
+        # "no filtering".
+        mock_cf_common.parse_daterange.return_value = (0, 10**10)
 
         mock_cf.user.status = AsyncMock(return_value=[])
 

@@ -246,65 +246,79 @@ class TestChallenge:
 
 
 class TestDuel:
+    # Our fork's duel schema is guild-aware (a user_id's duelist rating and
+    # duel history are scoped to a guild), unlike upstream's global one; every
+    # call here passes GUILD explicitly to match that.
+    GUILD = 100
+
     async def test_register_and_is_duelist(self, user_db):
-        await user_db.register_duelist(1)
-        result = await user_db.is_duelist(1)
+        await user_db.register_duelist(1, self.GUILD)
+        result = await user_db.is_duelist(1, self.GUILD)
         assert result is not None
 
     async def test_is_not_duelist(self, user_db):
-        result = await user_db.is_duelist(999)
+        result = await user_db.is_duelist(999, self.GUILD)
         assert result is None
 
     async def test_create_duel(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
         assert duel_id is not None
         assert duel_id > 0
 
     async def test_check_duel_challenge(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        result = await user_db.check_duel_challenge(1)
+        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD)
+        result = await user_db.check_duel_challenge(1, self.GUILD)
         assert result is not None
 
     async def test_check_duel_accept(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        result = await user_db.check_duel_accept(2)
+        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD)
+        result = await user_db.check_duel_accept(2, self.GUILD)
         assert result is not None
 
     async def test_check_duel_decline(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        result = await user_db.check_duel_decline(2)
+        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD)
+        result = await user_db.check_duel_decline(2, self.GUILD)
         assert result is not None
 
     async def test_check_duel_withdraw(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        result = await user_db.check_duel_withdraw(1)
+        await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD)
+        result = await user_db.check_duel_withdraw(1, self.GUILD)
         assert result is not None
 
     async def test_start_duel(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        rc = await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        rc = await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         assert rc == 1
 
     async def test_cancel_duel(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        rc = await user_db.cancel_duel(duel_id, Duel.DECLINED)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        rc = await user_db.cancel_duel(duel_id, self.GUILD, Duel.DECLINED)
         assert rc == 1
 
     async def test_complete_duel_challenger_wins(self, user_db, make_problem):
-        await user_db.register_duelist(1)
-        await user_db.register_duelist(2)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.register_duelist(2, self.GUILD)
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         rc = await user_db.complete_duel(
             duel_id,
+            self.GUILD,
             Winner.CHALLENGER,
             3000.0,
             winner_id=1,
@@ -315,13 +329,16 @@ class TestDuel:
         assert rc == 1
 
     async def test_complete_duel_draw(self, user_db, make_problem):
-        await user_db.register_duelist(1)
-        await user_db.register_duelist(2)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.register_duelist(2, self.GUILD)
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         rc = await user_db.complete_duel(
             duel_id,
+            self.GUILD,
             Winner.DRAW,
             3000.0,
             dtype=DuelType.UNOFFICIAL,
@@ -330,30 +347,35 @@ class TestDuel:
 
     async def test_invalidate_duel(self, user_db, make_problem):
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
-        rc = await user_db.invalidate_duel(duel_id)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
+        rc = await user_db.invalidate_duel(duel_id, self.GUILD)
         assert rc == 1
 
     async def test_get_duel_rating(self, user_db):
-        await user_db.register_duelist(1)
-        rating = await user_db.get_duel_rating(1)
+        await user_db.register_duelist(1, self.GUILD)
+        rating = await user_db.get_duel_rating(1, self.GUILD)
         assert rating == 1500
 
     async def test_update_duel_rating(self, user_db):
-        await user_db.register_duelist(1)
-        await user_db.update_duel_rating(1, 50)
-        rating = await user_db.get_duel_rating(1)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.update_duel_rating(1, self.GUILD, 50)
+        rating = await user_db.get_duel_rating(1, self.GUILD)
         assert rating == 1550
 
     async def test_get_duels(self, user_db, make_problem):
-        await user_db.register_duelist(1)
-        await user_db.register_duelist(2)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.register_duelist(2, self.GUILD)
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         await user_db.complete_duel(
             duel_id,
+            self.GUILD,
             Winner.CHALLENGER,
             3000.0,
             winner_id=1,
@@ -361,17 +383,20 @@ class TestDuel:
             delta=50,
             dtype=DuelType.OFFICIAL,
         )
-        duels = await user_db.get_duels(1)
+        duels = await user_db.get_duels(1, self.GUILD)
         assert len(duels) == 1
 
     async def test_get_duel_wins(self, user_db, make_problem):
-        await user_db.register_duelist(1)
-        await user_db.register_duelist(2)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.register_duelist(2, self.GUILD)
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         await user_db.complete_duel(
             duel_id,
+            self.GUILD,
             Winner.CHALLENGER,
             3000.0,
             winner_id=1,
@@ -379,17 +404,20 @@ class TestDuel:
             delta=50,
             dtype=DuelType.OFFICIAL,
         )
-        wins = await user_db.get_duel_wins(1)
+        wins = await user_db.get_duel_wins(1, self.GUILD)
         assert len(wins) == 1
 
     async def test_get_recent_duels(self, user_db, make_problem):
-        await user_db.register_duelist(1)
-        await user_db.register_duelist(2)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.register_duelist(2, self.GUILD)
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         await user_db.complete_duel(
             duel_id,
+            self.GUILD,
             Winner.CHALLENGER,
             3000.0,
             winner_id=1,
@@ -397,17 +425,20 @@ class TestDuel:
             delta=50,
             dtype=DuelType.OFFICIAL,
         )
-        recent = await user_db.get_recent_duels()
+        recent = await user_db.get_recent_duels(self.GUILD)
         assert len(recent) >= 1
 
     async def test_get_num_duel_completed(self, user_db, make_problem):
-        await user_db.register_duelist(1)
-        await user_db.register_duelist(2)
+        await user_db.register_duelist(1, self.GUILD)
+        await user_db.register_duelist(2, self.GUILD)
         prob = make_problem(name='Duel Problem', contestId=1, index='A')
-        duel_id = await user_db.create_duel(1, 2, 1000.0, prob, DuelType.OFFICIAL)
-        await user_db.start_duel(duel_id, 2000.0)
+        duel_id = await user_db.create_duel(
+            1, 2, 1000.0, prob, DuelType.OFFICIAL, self.GUILD
+        )
+        await user_db.start_duel(duel_id, self.GUILD, 2000.0)
         await user_db.complete_duel(
             duel_id,
+            self.GUILD,
             Winner.CHALLENGER,
             3000.0,
             winner_id=1,
@@ -415,7 +446,7 @@ class TestDuel:
             delta=50,
             dtype=DuelType.OFFICIAL,
         )
-        count = await user_db.get_num_duel_completed(1)
+        count = await user_db.get_num_duel_completed(1, self.GUILD)
         assert count == 1
 
 

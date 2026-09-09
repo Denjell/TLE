@@ -29,6 +29,20 @@ class Gitgud(IntEnum):
     FORCED_NOGUD = 3
 
 
+class Training(IntEnum):
+    NOTSTARTED = 0
+    ACTIVE = 1
+    COMPLETED = 2
+
+
+class TrainingProblemStatus(IntEnum):
+    SOLVED = 0
+    SOLVED_TOO_SLOW = 1
+    ACTIVE = 2
+    SKIPPED = 3
+    INVALIDATED = 4
+
+
 class Duel(IntEnum):
     PENDING = 0
     DECLINED = 1
@@ -48,6 +62,8 @@ class Winner(IntEnum):
 class DuelType(IntEnum):
     UNOFFICIAL = 0
     OFFICIAL = 1
+    ADJUNOFFICIAL = 2
+    ADJOFFICIAL = 3
 
 
 class RatedVC(IntEnum):
