@@ -133,9 +133,12 @@ def main() -> None:
 
     setup()
 
+    # Deliberately not enabling the privileged Members and Message Content
+    # intents. Member lookups go through discord_common.fetch_member(s)
+    # (REST fallback) instead of the gateway-populated cache, and every
+    # command is exposed as a slash/hybrid command so it works without
+    # relying on message content.
     intents = discord.Intents.default()
-    intents.members = True
-    intents.message_content = True
 
     bot = TLEBot(
         nodb=args.nodb,

@@ -334,6 +334,13 @@ class Handles(commands.Cog):
         assert isinstance(self._set_ex_users_inactive_task, tasks.Task)
         self._set_ex_users_inactive_task.start()
 
+    # on_member_remove/on_member_join never fire without the privileged
+    # Members intent (Discord simply doesn't send them), which we don't
+    # request. Kept so they resume working for free if that intent is ever
+    # enabled; until then, _set_ex_users_inactive_task's periodic sweep is
+    # what actually keeps active/inactive status and role assignment
+    # up to date (with a delay of up to _UPDATE_HANDLE_STATUS_INTERVAL,
+    # instead of immediately on join/leave).
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
         await self.bot.user_db.set_inactive([(member.guild.id, member.id)])
@@ -342,7 +349,8 @@ class Handles(commands.Cog):
     @commands.has_role(constants.TLE_ADMIN)
     async def _updatestatus(self, ctx: commands.Context) -> None:
         gid = ctx.guild.id
-        active_ids = [m.id for m in ctx.guild.members]
+        members = await discord_common.fetch_members(ctx.guild)
+        active_ids = [m.id for m in members]
         await self.bot.user_db.reset_status(gid)
         rc = 0
         for chunk in paginator.chunkify(active_ids, 100):
@@ -361,17 +369,25 @@ class Handles(commands.Cog):
         waiter=tasks.Waiter.fixed_delay(_UPDATE_HANDLE_STATUS_INTERVAL),
     )
     async def _set_ex_users_inactive_task(self, _: Any) -> None:
-        # To set users inactive in case the bot was dead when they left.
+        # Stands in for on_member_remove/on_member_join (see above): marks
+        # users who left as inactive, and re-syncs ranks for guilds with
+        # auto role update enabled so newly-joined members with a handle
+        # already on file aren't stuck without a rank role for too long.
         to_set_inactive = []
         for guild in self.bot.guilds:
             user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(
                 guild.id
             )
+            current_member_ids = {
+                m.id for m in await discord_common.fetch_members(guild)
+            }
             to_set_inactive += [
                 (guild.id, user_id)
                 for user_id, _ in user_id_handle_pairs
-                if guild.get_member(user_id) is None
+                if user_id not in current_member_ids
             ]
+            if await self.bot.user_db.has_auto_role_update_enabled(guild.id):
+                await self._update_ranks_all(guild)
         await self.bot.user_db.set_inactive(to_set_inactive)
 
     @events.listener_spec(
@@ -631,7 +647,7 @@ class Handles(commands.Cog):
                 f'Discord username for `{handle}` not found in database'
             )
         user = await self.bot.user_db.fetch_cf_user(handle)
-        member = ctx.guild.get_member(user_id)
+        member = await discord_common.fetch_member(ctx.guild, user_id)
         if member is None:
             raise HandleCogError(f'{user_id} not found in the guild')
         embed = _make_profile_embed(member, user, mode='get')
@@ -647,7 +663,7 @@ class Handles(commands.Cog):
             raise HandleCogError(f'{handle} not found in database')
 
         await self.bot.user_db.remove_handle(handle, ctx.guild.id)
-        member = ctx.guild.get_member(user_id)
+        member = await discord_common.fetch_member(ctx.guild, user_id)
         await self.update_member_rank_role(
             member, role_to_assign=None, reason='Handle unlinked'
         )
@@ -673,19 +689,16 @@ class Handles(commands.Cog):
         handles = []
         rev_lookup = {}
         for user_id, handle in user_id_and_handles:
-            member = ctx.guild.get_member(user_id)
+            member = await discord_common.fetch_member(ctx.guild, user_id)
             handles.append(handle)
             rev_lookup[handle] = member
         await self._unmagic_handles(ctx, handles, rev_lookup)
 
-    @handle.command(
-        brief='Show handle resolution for the given handles',
-        with_app_command=False,
-    )
+    @handle.command(brief='Show handle resolution for the given handles')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def unmagic_debug(self, ctx: commands.Context, *args: str) -> None:
+    async def unmagic_debug(self, ctx: commands.Context, *, args: str = '') -> None:
         """See what the resolve logic would do."""
-        handles = list(args)
+        handles = args.split()
         skip_filter = False
         if '+skip_filter' in handles:
             handles.remove('+skip_filter')
@@ -740,13 +753,14 @@ class Handles(commands.Cog):
             lines += failed
         return discord_common.embed_success('\n'.join(lines))
 
-    @commands.command(
+    @commands.hybrid_command(
         brief='Show gudgitters',
         aliases=['gitgudders', 'gitbadders', 'gg'],
         usage='[div1|div2|div3] [+all]',
     )
-    async def gudgitters(self, ctx: commands.Context, *args: str) -> None:
+    async def gudgitters(self, ctx: commands.Context, *, args: str = '') -> None:
         """Show the list of users of gitgud with their scores."""
+        args = args.split()
         res = await self.bot.user_db.get_gudgitters()
         res.sort(key=lambda r: r[1], reverse=True)
         
@@ -763,10 +777,11 @@ class Handles(commands.Cog):
             if arg == "+all":
                 showall = True
 
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
         rankings = []
         index = 0
         for user_id, score in res:
-            member = ctx.guild.get_member(int(user_id))
+            member = members_by_id.get(int(user_id))
             if not showall and member is None:
                 continue
             if score > 0:
@@ -801,10 +816,10 @@ class Handles(commands.Cog):
                     if self.dlo <= change.ratingUpdateTimeSeconds < self.dhi]
         return rating_changes
 
-    @commands.command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def monthlygudgitters(self, ctx, *args):
+    @commands.hybrid_command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
+    async def monthlygudgitters(self, ctx, *, args: str = '') -> None:
         """Show the list of users of gitgud with their scores."""
-        
+        args = args.split()
         # Calculate time range of given month (d=) or current month
         now = dt.datetime.now()
         for arg in args:
@@ -845,11 +860,12 @@ class Handles(commands.Cog):
             else:
                 raise HandleCogError(f'Tuple size {len(entry)} for entry {entry[0]}')
         
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
         rankings = []
         index = 0
         cache = self.bot.cf_cache.rating_changes_cache
         for user_id, score in sorted(res.items(), key=lambda item: item[1], reverse=True):
-            member = ctx.guild.get_member(int(user_id))
+            member = members_by_id.get(int(user_id))
             if not showall and member is None:
                 continue
             if score > 0:
@@ -888,17 +904,18 @@ class Handles(commands.Cog):
         discord_file = get_gudgitters_image(rankings)
         await ctx.send(file=discord_file)
 
-    @handle.command(brief='Show all handles', with_app_command=False)
-    async def list(self, ctx: commands.Context, *countries: str) -> None:
+    @handle.command(brief='Show all handles')
+    async def list(self, ctx: commands.Context, *, countries: str = '') -> None:
         """Shows members of the server who have registered their handles and
         their Codeforces ratings. You can additionally specify a list of countries
         if you wish to display only members from those countries. Country data is
         sourced from codeforces profiles. e.g. ;handle list Croatia Slovenia
         """
-        country_list = [country.title() for country in countries]
+        country_list = [country.title() for country in countries.split()]
         res = await self.bot.user_db.get_cf_users_for_guild(ctx.guild.id)
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
         users = [
-            (ctx.guild.get_member(user_id), cf_user.handle, cf_user.rating)
+            (members_by_id.get(user_id), cf_user.handle, cf_user.rating)
             for user_id, cf_user in res
             if not country_list or cf_user.country in country_list
         ]
@@ -939,10 +956,11 @@ class Handles(commands.Cog):
             key=lambda p: p[1].rating if p[1].rating is not None else -1,
             reverse=True,
         )
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
         rows = []
         author_idx = None
         for user_id, cf_user in user_id_cf_user_pairs:
-            member = ctx.guild.get_member(user_id)
+            member = members_by_id.get(user_id)
             if member is None:
                 continue
             idx = len(rows)
@@ -990,8 +1008,9 @@ class Handles(commands.Cog):
     async def _update_ranks(
         self, guild: discord.Guild, res: builtins.list[tuple[int, str]]
     ) -> None:
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(guild)}
         member_handles = [
-            (guild.get_member(user_id), handle) for user_id, handle in res
+            (members_by_id.get(user_id), handle) for user_id, handle in res
         ]
         member_handles = [
             (member, handle) for member, handle in member_handles if member is not None
@@ -1035,8 +1054,9 @@ class Handles(commands.Cog):
         increases for the members of this guild.
         """
         user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(guild.id)
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(guild)}
         member_handle_pairs = [
-            (guild.get_member(user_id), handle)
+            (members_by_id.get(user_id), handle)
             for user_id, handle in user_id_handle_pairs
         ]
 
@@ -1390,8 +1410,9 @@ class Handles(commands.Cog):
             'Processing members for grandfathering Trusted...'
         )
 
-        # Create a list to avoid issues if members leave/join during processing
-        members_to_process = list(guild.members)
+        # Fetched once up front to avoid issues if members leave/join during
+        # processing.
+        members_to_process = await discord_common.fetch_members(guild)
 
         for i, member in enumerate(members_to_process):
             processed_count += 1

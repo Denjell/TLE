@@ -201,13 +201,14 @@ class Codeforces(commands.Cog):
                 ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True
             )
 
-    @commands.command(
+    @commands.hybrid_command(
         brief='Recommend a problem',
         usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2]'
         ' [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]',
     )
     @cf_common.user_guard(group='gitgud')
-    async def gimme(self, ctx: commands.Context, *args: str) -> None:
+    async def gimme(self, ctx: commands.Context, *, args: str = '') -> None:
+        args = args.split()
         (handle,) = await cf_common.resolve_handles(
             ctx, self.converter, ('!' + str(ctx.author),)
         )
@@ -267,14 +268,15 @@ class Codeforces(commands.Cog):
             embed.add_field(name='Matched tags', value=tagslist)
         await ctx.send(f'Recommended problem for `{handle}`', embed=embed)
 
-    @commands.command(
+    @commands.hybrid_command(
         brief='List solved problems',
         usage='[handles] [+hardest] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]',  # noqa: E501
     )
-    async def stalk(self, ctx: commands.Context, *args: str) -> None:
+    async def stalk(self, ctx: commands.Context, *, args: str = '') -> None:
         """Print problems solved by user sorted by time (default) or rating.
         All submission types are included by default (practice, contest, etc.)
         """
+        args = args.split()
         (hardest,), remaining = cf_common.filter_flags(args, ['+hardest'])
         filt = cf_common.SubFilter(False)
         filtered_args = filt.parse(remaining)
@@ -328,16 +330,17 @@ class Codeforces(commands.Cog):
             ctx=ctx,
         )
 
-    @commands.command(
+    @commands.hybrid_command(
         brief='Create a mashup',
         usage='[handles] [+tag..] [~tag..] [+divX] [~divX] [?[-]delta]',
     )
-    async def mashup(self, ctx: commands.Context, *args: str) -> None:
+    async def mashup(self, ctx: commands.Context, *, args: str = '') -> None:
         """Create a mashup contest using problems within -200 and +400 of
         average rating of handles provided.
         Add tags with "+" before them.
         Ban tags with "~" before them.
         """
+        args = args.split()
         delta = 100
         handles: list[str] = [arg for arg in args if arg[0] not in '+~?']
         tags = cf_common.parse_tags(args, prefix='+')
@@ -412,10 +415,9 @@ class Codeforces(commands.Cog):
         brief='Challenge',
         aliases=['gitbad'],
         usage='[rating|rating1-rating2] [+tags] [~tags] [+divX] [~divX]',
-        with_app_command=False,
     )
     @cf_common.user_guard(group='gitgud')
-    async def gitgud(self, ctx: commands.Context, *args: str) -> None:
+    async def gitgud(self, ctx: commands.Context, *, args: str = '') -> None:
         """Gitgud: Request a problem with a specific rating with ;gitgud
         <rating> or within a rating range with ;gitgud <rating1>-<rating2>
         - Points are assigned by difference between problem rating and your
@@ -438,6 +440,7 @@ class Codeforces(commands.Cog):
         rating diff | <-100| -100 |   0  |  100 |  200 |  300 |  400 |>=500
         tags        |   1  |   2  |   3  |   5  |   8  |  12  |  17  |  23
         """
+        args = args.split()
         (handle,) = await cf_common.resolve_handles(
             ctx, self.converter, ('!' + str(ctx.author),)
         )
@@ -557,7 +560,7 @@ class Codeforces(commands.Cog):
             ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True
         )
 
-    @commands.command(brief='Print user nogud history')
+    @commands.hybrid_command(brief='Print user nogud history')
     async def nogudlog(
         self, ctx: commands.Context, member: discord.Member | None = None
     ) -> None:
@@ -640,9 +643,7 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send('You have already claimed your points')
 
-    @commands.hybrid_command(
-        brief='Skip challenge', aliases=['toobad'], with_app_command=False
-    )
+    @commands.hybrid_command(brief='Skip challenge', aliases=['toobad'])
     @cf_common.user_guard(group='gitgud')
     async def nogud(self, ctx: commands.Context) -> None:
         await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -680,10 +681,13 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send('Failed to force challenge skip.')
 
-    @commands.command(brief='Recommend a contest', usage='[handles...] [+pattern...]')
-    async def vc(self, ctx: commands.Context, *args: str) -> None:
+    @commands.hybrid_command(
+        brief='Recommend a contest', usage='[handles...] [+pattern...]'
+    )
+    async def vc(self, ctx: commands.Context, *, args: str = '') -> None:
         """Recommends a contest based on Codeforces rating of the handle provided.
         e.g ;vc mblazev c1729 +global +hello +goodbye +avito"""
+        args = args.split()
         markers = [x for x in args if x[0] == '+']
         handles = [x for x in args if x[0] != '+'] or ['!' + str(ctx.author)]
         handles = await cf_common.resolve_handles(
@@ -752,13 +756,14 @@ class Codeforces(commands.Cog):
             ctx=ctx,
         )
 
-    @commands.command(
+    @commands.hybrid_command(
         brief='Display unsolved rounds closest to completion', usage='[keywords]'
     )
-    async def fullsolve(self, ctx: commands.Context, *args: str) -> None:
+    async def fullsolve(self, ctx: commands.Context, *, args: str = '') -> None:
         """Displays a list of contests, sorted by number of unsolved problems.
         Contest names matching any of the provided tags will be considered. e.g
         ;fullsolve +edu"""
+        args = args.split()
         (handle,) = await cf_common.resolve_handles(
             ctx, self.converter, ('!' + str(ctx.author),)
         )
@@ -857,12 +862,12 @@ class Codeforces(commands.Cog):
                 right = r
         return round((left + right) / 2)
 
-    @commands.command(brief='Calculate team rating', usage='[handles] [+peak]')
-    async def teamrate(self, ctx: commands.Context, *args: str) -> None:
+    @commands.hybrid_command(brief='Calculate team rating', usage='[handles] [+peak]')
+    async def teamrate(self, ctx: commands.Context, *, args: str = '') -> None:
         """Provides the combined rating of the entire team. If +server is
         provided as the only handle, will display the rating of the entire
         server. Supports multipliers. e.g: ;teamrate gamegame*1000"""
-
+        args = args.split()
         (is_entire_server, peak), handles = cf_common.filter_flags(
             args, ['+server', '+peak']
         )

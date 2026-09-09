@@ -69,6 +69,39 @@ def has_role(member: discord.Member, role_identifier: str | int) -> bool:
     return any(role.name == role_identifier for role in member.roles)
 
 
+async def fetch_member(guild: discord.Guild, user_id: int) -> discord.Member | None:
+    """Like `Guild.get_member`, but falls back to a REST fetch when the
+    member isn't in the local cache.
+
+    We don't request the privileged Members intent, so the gateway-populated
+    member cache is incomplete (only members who have recently interacted
+    are in it); this fills the gap with a `GET /guilds/{id}/members/{id}`
+    call, which needs no privileged intent. Returns None if the member has
+    left the guild or the ID is invalid.
+    """
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(user_id)
+    except discord.NotFound:
+        return None
+    except discord.HTTPException:
+        logger.warning(f'fetch_member failed for user {user_id} in guild {guild.id}')
+        return None
+
+
+async def fetch_members(guild: discord.Guild) -> list[discord.Member]:
+    """Returns all members of the guild via paginated REST calls.
+
+    Like `fetch_member`, this needs no privileged intent, unlike relying on
+    `Guild.members`/`Guild.chunk()`, which depend on the gateway-populated
+    cache. Slower than the cache and subject to normal rate limits, so
+    avoid calling this in hot paths.
+    """
+    return [member async for member in guild.fetch_members(limit=None)]
+
+
 def send_error_if(*error_cls: type[Exception]) -> Callable[..., Any]:
     """Decorator for `cog_command_error` methods.
 
@@ -142,13 +175,15 @@ async def presence(bot: Any) -> None:
 
     @tasks.task(name='OrzUpdate', waiter=tasks.Waiter.fixed_delay(10 * 60))
     async def presence_task(_: Any) -> None:
-        target = random.choice(
-            [
-                member
-                for member in bot.get_all_members()
-                if not has_role(member, constants.TLE_PURGATORY)
-            ]
-        )
+        guilds = list(bot.guilds)
+        if not guilds:
+            return
+        guild = random.choice(guilds)
+        members = await fetch_members(guild)
+        eligible = [m for m in members if not has_role(m, constants.TLE_PURGATORY)]
+        if not eligible:
+            return
+        target = random.choice(eligible)
         await bot.change_presence(
             activity=discord.Game(name=f'{target.display_name} orz')
         )

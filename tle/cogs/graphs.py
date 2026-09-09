@@ -316,11 +316,10 @@ class Graphs(commands.Cog):
     @plot.command(
         brief='Plot Codeforces rating graph',
         usage='[+zoom] [+number] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]',  # noqa: E501
-        with_app_command=False,
     )
-    async def rating(self, ctx: commands.Context, *args: str) -> None:
+    async def rating(self, ctx: commands.Context, *, args: str = '') -> None:
         """Plots Codeforces rating graph for the handles provided."""
-
+        args = args.split()
         (zoom, number, peak), remaining = cf_common.filter_flags(
             args, ['+zoom', '+number', '+peak']
         )
@@ -391,12 +390,10 @@ class Graphs(commands.Cog):
         brief='Plot Codeforces performance graph',
         aliases=['perf'],
         usage='[+zoom] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]',
-        with_app_command=False,
     )
-    async def performance(self, ctx: commands.Context, *args: str) -> None:
+    async def performance(self, ctx: commands.Context, *, args: str = '') -> None:
         """Plots Codeforces performance graph for the handles provided."""
-
-        (zoom, peak), args = cf_common.filter_flags(args, ['+zoom' , '+peak'])
+        (zoom, peak), args = cf_common.filter_flags(args.split(), ['+zoom' , '+peak'])
         filt = cf_common.SubFilter()
         args = filt.parse(args)
         handles = args or ('!' + str(ctx.author),)
@@ -452,14 +449,13 @@ class Graphs(commands.Cog):
         brief='Plot Codeforces extremes graph',
         usage='[handles] [+solved] [+unsolved] [+nolegend]'
         ' [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]',
-        with_app_command=False,
     )
-    async def extreme(self, ctx: commands.Context, *args: str) -> None:
+    async def extreme(self, ctx: commands.Context, *, args: str = '') -> None:
         """Plots pairs of lowest rated unsolved problem and highest rated
         solved problem for every contest that was rated for the given user.
         """
         (solved, unsolved, nolegend), remaining = cf_common.filter_flags(
-            args, ['+solved', '+unsolved', '+nolegend']
+            args.split(), ['+solved', '+unsolved', '+nolegend']
         )
         (legend,) = cf_common.negate_flags(nolegend)
         if not solved and not unsolved:
@@ -508,14 +504,13 @@ class Graphs(commands.Cog):
     @plot.command(
         brief="Show histogram of solved problems' rating on CF",
         usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]',  # noqa: E501
-        with_app_command=False,
     )
-    async def solved(self, ctx: commands.Context, *args: str) -> None:
+    async def solved(self, ctx: commands.Context, *, args: str = '') -> None:
         """Shows a histogram of solved problems' rating on Codeforces for the
         handles provided. e.g. ;plot solved meooow +contest +virtual +outof +dp
         """
         filt = cf_common.SubFilter()
-        remaining = filt.parse(args)
+        remaining = filt.parse(args.split())
         handles: Sequence[str] = remaining or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
@@ -587,12 +582,11 @@ class Graphs(commands.Cog):
     @plot.command(
         brief='Show histogram of solved problems on CF over time',
         usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [phase_days=] [c+marker..] [i+index..]',  # noqa: E501
-        with_app_command=False,
     )
-    async def hist(self, ctx: commands.Context, *args: str) -> None:
+    async def hist(self, ctx: commands.Context, *, args: str = '') -> None:
         """Shows histogram of problems solved on Codeforces over time"""
         filt = cf_common.SubFilter()
-        remaining = filt.parse(args)
+        remaining = filt.parse(args.split())
         phase_days = 1
         handle_list: list[str] = []
         for arg in remaining:
@@ -706,12 +700,11 @@ class Graphs(commands.Cog):
     @plot.command(
         brief='Plot count of solved CF problems over time',
         usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]',  # noqa: E501
-        with_app_command=False,
     )
-    async def curve(self, ctx: commands.Context, *args: str) -> None:
+    async def curve(self, ctx: commands.Context, *, args: str = '') -> None:
         """Plots the count of problems solved over time on Codeforces."""
         filt = cf_common.SubFilter()
-        remaining = filt.parse(args)
+        remaining = filt.parse(args.split())
         handles: Sequence[str] = remaining or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
@@ -757,12 +750,11 @@ class Graphs(commands.Cog):
         brief='Show history of problems solved by rating',
         aliases=['chilli'],
         usage='[handle] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [b=10] [s=3] [c+marker..] [i+index..] [+nolegend]',  # noqa: E501
-        with_app_command=False,
     )
-    async def scatter(self, ctx: commands.Context, *args: str) -> None:
+    async def scatter(self, ctx: commands.Context, *, args: str = '') -> None:
         """Plot Codeforces rating overlaid on a scatter plot of problems solved.
         Also plots a running average of ratings of problems solved in practice."""
-        (nolegend,), remaining = cf_common.filter_flags(args, ['+nolegend'])
+        (nolegend,), remaining = cf_common.filter_flags(args.split(), ['+nolegend'])
         (legend,) = cf_common.negate_flags(nolegend)
         filt = cf_common.SubFilter()
         remaining = filt.parse(remaining)
@@ -917,9 +909,10 @@ class Graphs(commands.Cog):
     @plot.command(brief='Show server rating distribution')
     async def distrib(self, ctx: commands.Context) -> None:
         """Plots rating distribution of users in this server"""
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
 
         def in_purgatory(userid: int) -> bool:
-            member = ctx.guild.get_member(int(userid))
+            member = members_by_id.get(int(userid))
             return not member or discord_common.has_role(
                 member, constants.TLE_PURGATORY
             )
@@ -978,14 +971,13 @@ class Graphs(commands.Cog):
     @plot.command(
         brief='Show percentile distribution on codeforces',
         usage='[+zoom] [+nomarker] [handles...] [+exact]',
-        with_app_command=False,
     )
-    async def centile(self, ctx: commands.Context, *args: str) -> None:
+    async def centile(self, ctx: commands.Context, *, args: str = '') -> None:
         """Show codeforces percentile distribution and mark given handles in the plot.
 
         If +zoom and handles are given, it zooms to the neighborhood of the handles."""
         (zoom, nomarker, exact), remaining = cf_common.filter_flags(
-            args, ['+zoom', '+nomarker', '+exact']
+            args.split(), ['+zoom', '+nomarker', '+exact']
         )
         # Prepare data
         intervals: list[tuple[int, int]] = [
@@ -1108,12 +1100,22 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Plot histogram of gudgiting', with_app_command=False)
-    async def howgud(self, ctx: commands.Context, *members: discord.Member) -> None:
+    @plot.command(brief='Plot histogram of gudgiting')
+    async def howgud(
+        self,
+        ctx: commands.Context,
+        member1: discord.Member | None = None,
+        member2: discord.Member | None = None,
+        member3: discord.Member | None = None,
+        member4: discord.Member | None = None,
+        member5: discord.Member | None = None,
+    ) -> None:
         assert isinstance(ctx.author, discord.Member)
-        members = members or (ctx.author,)
-        if len(members) > 5:
-            raise GraphCogError('Please specify at most 5 gudgitters.')
+        members = tuple(
+            m
+            for m in (member1, member2, member3, member4, member5)
+            if m is not None
+        ) or (ctx.author,)
 
         deltas = [
             [x[0] for x in await self.bot.user_db.howgud(member.id)]
@@ -1142,17 +1144,15 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(
-        brief='Plot distribution of server members by country',
-        with_app_command=False,
-    )
-    async def country(self, ctx: commands.Context, *countries: str) -> None:
+    @plot.command(brief='Plot distribution of server members by country')
+    async def country(self, ctx: commands.Context, *, countries: str = '') -> None:
         """Plots distribution of server members by countries. When no countries
         are specified, plots a bar graph of all members by country. When one or
         more countries are specified, plots a swarmplot of members by country
         and rating. Only members with registered handles and countries set on
         Codeforces are considered.
         """
+        countries = countries.split()
         max_countries = 8
         if len(countries) > max_countries:
             raise GraphCogError(f'At most {max_countries} countries may be specified.')
@@ -1257,19 +1257,17 @@ class Graphs(commands.Cog):
     @plot.command(
         brief='Show rating changes by rank',
         usage='contest_id [+server] [+zoom] [handles..]',
-        with_app_command=False,
     )
     async def visualrank(
-        self, ctx: commands.Context, contest_id: int, *args: str
+        self, ctx: commands.Context, contest_id: int, *, args: str = ''
     ) -> None:
         """Plot rating changes by rank. Add handles to specify a handle in the plot.
         if arguments contains `+server`, it will include just server members
         and not all codeforces users. Specify `+zoom` to zoom to the
         neighborhood of handles.
         """
-
         (in_server, zoom), remaining = cf_common.filter_flags(
-            args,
+            args.split(),
             ['+server', '+zoom'],
         )
         handles: Sequence[str] = remaining
@@ -1369,13 +1367,11 @@ class Graphs(commands.Cog):
     @plot.command(
         brief='Show speed of solving problems by rating',
         usage='[handles...] [+contest] [+virtual] [+outof] [+scatter] [+median] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [s=3]',  # noqa: E501
-        with_app_command=False,
     )
-    async def speed(self, ctx: commands.Context, *args: str) -> None:
+    async def speed(self, ctx: commands.Context, *, args: str = '') -> None:
         """Plot time spent on problems of particular rating during contest."""
-
         (add_scatter, use_median), remaining = cf_common.filter_flags(
-            args, ['+scatter', '+median']
+            args.split(), ['+scatter', '+median']
         )
         filt = cf_common.SubFilter()
         remaining = filt.parse(remaining)

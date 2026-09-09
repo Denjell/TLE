@@ -143,7 +143,8 @@ class Round(commands.Cog):
             if await self.bot.user_db.check_if_user_in_ongoing_round(ctx.guild.id, member.id):
                 busy_members.append(member)
         if busy_members:
-            busy_members_str = ", ".join([ctx.guild.get_member(int(member.id)).mention for member in busy_members])
+            # busy_members already holds resolved discord.Member objects.
+            busy_members_str = ", ".join([member.mention for member in busy_members])
             error = f'{busy_members_str} are registered in ongoing lockout rounds.'
             raise RoundCogError(error)
 
@@ -233,7 +234,10 @@ class Round(commands.Cog):
                         inline=True)
         return embed
 
-    @commands.group(brief='Commands related to lockout rounds! Type ;round for more details', invoke_without_command=True)
+    @commands.hybrid_group(
+        brief='Commands related to lockout rounds! Type ;round for more details',
+        fallback='show',
+    )
     async def round(self, ctx):
         await ctx.send(embed=self.make_round_embed(ctx))
 
@@ -276,11 +280,21 @@ class Round(commands.Cog):
 
 
     @round.command(name="challenge", brief="Challenge multiple users to a round", usage="[@user1 @user2...]")
-    async def challenge(self, ctx, *members: discord.Member):
+    async def challenge(
+        self,
+        ctx,
+        member1: discord.Member | None = None,
+        member2: discord.Member | None = None,
+        member3: discord.Member | None = None,
+        member4: discord.Member | None = None,
+        member5: discord.Member | None = None,
+    ) -> None:
         # check if we are in the correct channel
         await self._check_if_correct_channel(ctx)
 
-        members = list(set(members))
+        members = list(
+            {m for m in (member1, member2, member3, member4, member5) if m is not None}
+        )
         if ctx.author not in members:
             members.append(ctx.author)
         if len(members) > MAX_ROUND_USERS:
@@ -457,12 +471,22 @@ class Round(commands.Cog):
         updates, over, updated = await self._update_round(round)
 
         if updated or over:
-            await channel.send(f"{' '.join([(guild.get_member(int(m))).mention for m in round.users.split()])} there is an update in standings")
+            mentions = [
+                member.mention
+                for m in round.users.split()
+                if (member := await discord_common.fetch_member(guild, int(m)))
+            ]
+            await channel.send(f"{' '.join(mentions)} there is an update in standings")
 
         for i in range(len(updates)):
             if len(updates[i]):
+                mentions = [
+                    member.mention
+                    for m in updates[i]
+                    if (member := await discord_common.fetch_member(guild, m))
+                ]
                 await channel.send(embed=discord.Embed(
-                    description=f"{' '.join([(guild.get_member(m)).mention for m in updates[i]])} has solved problem worth **{round.points.split()[i]}** points",
+                    description=f"{' '.join(mentions)} has solved problem worth **{round.points.split()[i]}** points",
                     color=discord.Color.blue()))
 
         if not over and updated:
@@ -477,12 +501,12 @@ class Round(commands.Cog):
                                     list(map(int, round_info.times.split())))
 
             # change duel rating
-            eloChanges = self._calculateRatingChanges(
-                [
-                    [guild.get_member(user.id), user.rank, await self.bot.user_db.get_duel_rating(user.id, guild.id)]
-                    for user in ranklist
-                ]
-            )
+            rank_entries = []
+            for user in ranklist:
+                member = await discord_common.fetch_member(guild, user.id)
+                duel_rating = await self.bot.user_db.get_duel_rating(user.id, guild.id)
+                rank_entries.append([member, user.rank, duel_rating])
+            eloChanges = self._calculateRatingChanges(rank_entries)
             for id in list(map(int, round_info.users.split())):
                 await self.bot.user_db.update_duel_rating(id, guild.id, eloChanges[id][1])
 

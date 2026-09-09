@@ -594,16 +594,18 @@ class Contests(commands.Cog):
 
         return rated_contestants, ranklist
 
-    @commands.command(brief='Show ranklist for given handles and/or server members')
+    @commands.hybrid_command(
+        brief='Show ranklist for given handles and/or server members'
+    )
     async def ranklist(
-        self, ctx: commands.Context, contest_id: int, *args: str
+        self, ctx: commands.Context, contest_id: int, *, args: str = ''
     ) -> None:
         """
         Shows ranklist for the contest with given contest id. If handles contains
         '+server', all server members are included. No handles defaults to '+server'.
         Use '+official' for only showing rated participants for the round
         """
-        (show_official,), handles = cf_common.filter_flags(args, ['+official'])
+        (show_official,), handles = cf_common.filter_flags(args.split(), ['+official'])
         handles = await cf_common.resolve_handles(
             ctx, self.member_converter, handles, maxcnt=None, default_to_all_server=True
         )
@@ -690,8 +692,12 @@ class Contests(commands.Cog):
             ctx=ctx,
         )
 
-    @commands.command(
-        brief='Start a rated vc.', usage='<contest_id> <@user1 @user2 ...>'
+    @commands.hybrid_command(
+        brief='Start a rated vc.',
+        usage='<contest_id> <@user1 @user2 ...>',
+        # An unbounded list of mentioned members has no slash-command
+        # equivalent (Discord only supports a fixed set of named options).
+        with_app_command=False,
     )
     async def ratedvc(
         self, ctx: commands.Context, contest_id: int, *members: discord.Member
@@ -718,9 +724,12 @@ class Contests(commands.Cog):
         this_vc_member_ids = {str(member.id) for member in members}
         intersection = this_vc_member_ids & ongoing_vc_member_ids
         if intersection:
+            # members already holds resolved discord.Member objects for
+            # everyone in this_vc_member_ids.
+            members_by_id = {str(member.id): member for member in members}
             busy_members = ', '.join(
                 [
-                    ctx.guild.get_member(int(member_id)).mention
+                    members_by_id[member_id].mention
                     for member_id in intersection
                 ]
             )
@@ -765,8 +774,9 @@ class Contests(commands.Cog):
         """Make an embed containing a list of rank changes and rating changes for ratedvc participants."""  # noqa: E501
         contest = self.bot.cf_cache.contest_cache.get_contest(contest_id)
         user_id_handle_pairs = await self.bot.user_db.get_handles_for_guild(guild.id)
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(guild)}
         member_handle_pairs = [
-            (guild.get_member(int(user_id)), handle)
+            (members_by_id.get(int(user_id)), handle)
             for user_id, handle in user_id_handle_pairs
         ]
         member_change_pairs = [
@@ -993,11 +1003,24 @@ class Contests(commands.Cog):
             ctx=ctx,
         )
 
-    @commands.command(
+    @commands.hybrid_command(
         brief='Plot vc rating for a list of at most 5 users', usage='@user1 @user2 ..'
     )
-    async def vcrating(self, ctx: commands.Context, *members: discord.Member) -> None:
+    async def vcrating(
+        self,
+        ctx: commands.Context,
+        member1: discord.Member | None = None,
+        member2: discord.Member | None = None,
+        member3: discord.Member | None = None,
+        member4: discord.Member | None = None,
+        member5: discord.Member | None = None,
+    ) -> None:
         """Plots VC rating for at most 5 users."""
+        members = tuple(
+            m
+            for m in (member1, member2, member3, member4, member5)
+            if m is not None
+        )
         assert isinstance(ctx.author, discord.Member)
         members = members or (ctx.author,)
         if len(members) > 5:
@@ -1059,12 +1082,26 @@ class Contests(commands.Cog):
     ) -> None:
         pass
 
-    @commands.command(brief='Plot vc performance for a list of at most 5 users', aliases=['vcperf'], usage='@user1 @user2 ..')
-    async def vcperformance(self, ctx, *members: discord.Member):
+    @commands.hybrid_command(
+        brief='Plot vc performance for a list of at most 5 users',
+        aliases=['vcperf'],
+        usage='@user1 @user2 ..',
+    )
+    async def vcperformance(
+        self,
+        ctx: commands.Context,
+        member1: discord.Member | None = None,
+        member2: discord.Member | None = None,
+        member3: discord.Member | None = None,
+        member4: discord.Member | None = None,
+        member5: discord.Member | None = None,
+    ) -> None:
         """Plots VC performance for at most 5 users."""
-        members = members or (ctx.author, )
-        if len(members) > 5:
-            raise ContestCogError('Cannot plot more than 5 VCers at once.')
+        members = tuple(
+            m
+            for m in (member1, member2, member3, member4, member5)
+            if m is not None
+        ) or (ctx.author,)
         plot_data = defaultdict(list)
 
         min_rating = 1100
@@ -1114,8 +1151,8 @@ class Contests(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
 
-    @commands.command(brief='Estimation of contest problem ratings', aliases=['probrat'], usage='contest_id')
-    async def problemratings(self, ctx, contest_id: int):
+    @commands.hybrid_command(brief='Estimation of contest problem ratings', aliases=['probrat'], usage='contest_id')
+    async def problemratings(self, ctx: commands.Context, contest_id: int) -> None:
         """Estimation of contest problem ratings
         """
         await ctx.send('This will take a while')

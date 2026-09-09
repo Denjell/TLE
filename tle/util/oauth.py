@@ -9,7 +9,7 @@ import aiohttp
 import jwt
 from aiohttp import web
 
-from tle.util import codeforces_api as cf
+from tle.util import codeforces_api as cf, discord_common
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +221,7 @@ class OAuthServer:
             guild = self.bot.get_guild(pending.guild_id)
             if guild is None:
                 raise ValueError('Guild not found')
-            member = guild.get_member(pending.user_id)
+            member = await discord_common.fetch_member(guild, pending.user_id)
             if member is None:
                 raise ValueError('Member not found in guild')
 

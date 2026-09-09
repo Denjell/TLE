@@ -180,8 +180,12 @@ class DuelChallengeView(discord.ui.View):
 
         await self._disable_all(interaction)
 
-        challenger = interaction.guild.get_member(self.challenger_id)
-        challengee = interaction.guild.get_member(self.challengee_id)
+        # interaction.user is already known to be the challengee (checked
+        # above); only the challenger needs a lookup.
+        challengee = interaction.user
+        challenger = await discord_common.fetch_member(
+            interaction.guild, self.challenger_id
+        )
         channel = interaction.channel
 
         await channel.send(
@@ -224,8 +228,10 @@ class DuelChallengeView(discord.ui.View):
         rc = await self.bot.user_db.cancel_duel(
             self.duelid, self.guild_id, Duel.DECLINED
         )
-        challenger = interaction.guild.get_member(self.challenger_id)
-        challengee = interaction.guild.get_member(self.challengee_id)
+        challengee = interaction.user
+        challenger = await discord_common.fetch_member(
+            interaction.guild, self.challenger_id
+        )
         if rc:
             message = (
                 f'{challengee.mention} declined a challenge by {challenger.mention}.'
@@ -250,8 +256,10 @@ class DuelChallengeView(discord.ui.View):
         rc = await self.bot.user_db.cancel_duel(
             self.duelid, self.guild_id, Duel.WITHDRAWN
         )
-        challenger = interaction.guild.get_member(self.challenger_id)
-        challengee = interaction.guild.get_member(self.challengee_id)
+        challenger = interaction.user
+        challengee = await discord_common.fetch_member(
+            interaction.guild, self.challengee_id
+        )
         if rc:
             message = (
                 f'{challenger.mention} withdrew a challenge to {challengee.mention}.'
@@ -273,8 +281,12 @@ class DuelChallengeView(discord.ui.View):
             self.duelid, self.guild_id, Duel.EXPIRED
         )
         if rc and self.message:
-            challenger = self.message.guild.get_member(self.challenger_id)
-            challengee = self.message.guild.get_member(self.challengee_id)
+            challenger = await discord_common.fetch_member(
+                self.message.guild, self.challenger_id
+            )
+            challengee = await discord_common.fetch_member(
+                self.message.guild, self.challengee_id
+            )
             message = (
                 f'{challenger.mention}, your request to duel'
                 f' {challengee.mention} has expired!'
@@ -332,14 +344,14 @@ class Dueling(commands.Cog):
             ) = entry
             now = datetime.datetime.now().timestamp()
             if now - start_timestamp >= _DUEL_MAX_DUEL_DURATION:
-                challenger = guild.get_member(challenger_id)
+                challenger = await discord_common.fetch_member(guild, challenger_id)
                 if challenger is None:
                     logger.warning(
                         '_check_ongoing_duels_for_guild: member with'
                         f' {challenger_id} could not be retrieved.'
                     )
                     continue
-                challengee = guild.get_member(challengee_id)
+                challengee = await discord_common.fetch_member(guild, challengee_id)
                 if challengee is None:
                     logger.warning(
                         '_check_ongoing_duels_for_guild: member with'
@@ -422,10 +434,13 @@ class Dueling(commands.Cog):
         brief='Challenge to a duel',
         usage='opponent [rating] [+tag..] [~tag..] [+divX] [~divX] [nohandicap]'
         ' [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]',
-        with_app_command=False,
     )
     async def challenge(
-        self, ctx: commands.Context, opponent: discord.Member, *args: str
+        self,
+        ctx: commands.Context,
+        opponent: discord.Member,
+        *,
+        args: str = '',
     ) -> None:
         """Challenge another server member to a duel. Problem difficulty will
         be the lesser of duelist ratings minus 400. You can alternatively
@@ -435,6 +450,7 @@ class Dueling(commands.Cog):
         If the keyword 'nohandicap' is added there will be no handicap for the
         higher rated duelist.
         """
+        args = args.split()
         # check if we are in the correct channel
         await self._checkIfCorrectChannel(ctx)
 
@@ -552,9 +568,10 @@ class Dueling(commands.Cog):
             ]
             users = [await self.bot.user_db.fetch_cf_user(handle) for handle in handles]
 
-            # get discord member
-            challenger = ctx.guild.get_member(challenger_id)
-            challengee = ctx.guild.get_member(challengee_id)
+            # Both are already resolved Member objects from the command
+            # invocation, no lookup needed.
+            challenger = ctx.author
+            challengee = opponent
 
             challenger_higher = users[0].effective_rating > users[1].effective_rating
             highrated_user = users[0] if challenger_higher else users[1]
@@ -606,7 +623,7 @@ class Dueling(commands.Cog):
             raise DuelCogError(f'{ctx.author.mention}, you are not being challenged!')
 
         duelid, challenger = active
-        challenger = ctx.guild.get_member(challenger)
+        challenger = await discord_common.fetch_member(ctx.guild, challenger)
         await self.bot.user_db.cancel_duel(duelid, ctx.guild.id, Duel.DECLINED)
         message = (
             f'`{ctx.author.mention}` declined a challenge by {challenger.mention}.'
@@ -621,7 +638,7 @@ class Dueling(commands.Cog):
             raise DuelCogError(f'{ctx.author.mention}, you are not challenging anyone.')
 
         duelid, challengee = active
-        challengee = ctx.guild.get_member(challengee)
+        challengee = await discord_common.fetch_member(ctx.guild, challengee)
         await self.bot.user_db.cancel_duel(duelid, ctx.guild.id, Duel.WITHDRAWN)
         message = (
             f'{ctx.author.mention} withdrew a challenge to `{challengee.mention}`.'
@@ -639,7 +656,7 @@ class Dueling(commands.Cog):
             raise DuelCogError(f'{ctx.author.mention}, you are not being challenged.')
 
         duelid, challenger_id, name = active
-        challenger = ctx.guild.get_member(challenger_id)
+        challenger = await discord_common.fetch_member(ctx.guild, challenger_id)
         await ctx.send(
             f'Duel between {challenger.mention} and'
             f' {ctx.author.mention} starting in 15 seconds!'
@@ -682,7 +699,6 @@ class Dueling(commands.Cog):
         brief='Give up the duel (only for duels with handicap). Can only be used'
         ' by the lower rated duelist after the higher rated duelist has solved'
         ' the problem.',
-        with_app_command=False,
     )
     async def giveup(self, ctx: commands.Context) -> None:
         # check if we are in the correct channel
@@ -697,9 +713,18 @@ class Dueling(commands.Cog):
             problem_name, contest_id, index, dtype,
         ) = active
 
-        # get discord member
-        challenger = ctx.guild.get_member(challenger_id)
-        challengee = ctx.guild.get_member(challengee_id)
+        # get discord member (one side is always ctx.author, only the other
+        # needs a lookup)
+        challenger = (
+            ctx.author
+            if challenger_id == ctx.author.id
+            else await discord_common.fetch_member(ctx.guild, challenger_id)
+        )
+        challengee = (
+            ctx.author
+            if challengee_id == ctx.author.id
+            else await discord_common.fetch_member(ctx.guild, challengee_id)
+        )
 
         # get cf handles and cf.Users
         userids = [challenger_id, challengee_id]
@@ -772,8 +797,8 @@ class Dueling(commands.Cog):
         ) = data
 
         # get discord member
-        challenger = guild.get_member(challenger_id)
-        challengee = guild.get_member(challengee_id)
+        challenger = await discord_common.fetch_member(guild, challenger_id)
+        challengee = await discord_common.fetch_member(guild, challengee_id)
 
         # get cf handles and cf.Users
         userids = [challenger_id, challengee_id]
@@ -966,7 +991,7 @@ class Dueling(commands.Cog):
             offeree_id = (
                 challenger_id if ctx.author.id != challenger_id else challengee_id
             )
-            offeree = ctx.guild.get_member(offeree_id)
+            offeree = await discord_common.fetch_member(ctx.guild, offeree_id)
             await ctx.send(
                 f'{ctx.author.mention} is offering a draw to {offeree.mention}!'
             )
@@ -976,7 +1001,7 @@ class Dueling(commands.Cog):
             await ctx.send(f"{ctx.author.mention}, you've already offered a draw.")
             return
 
-        offerer = ctx.guild.get_member(self.draw_offers[duelid])
+        offerer = await discord_common.fetch_member(ctx.guild, self.draw_offers[duelid])
         embed = await self._complete_duel(
             duelid, ctx.guild.id, Winner.DRAW, offerer, ctx.author, now, 0.5, dtype
         )
@@ -1221,8 +1246,9 @@ class Dueling(commands.Cog):
     @duel.command(brief='Show duelists')
     async def ranklist(self, ctx: commands.Context) -> None:
         """Show the list of duelists with their duel rating."""
+        members_by_id = {m.id: m for m in await discord_common.fetch_members(ctx.guild)}
         user_pairs = [
-            (ctx.guild.get_member(user_id), rating)
+            (members_by_id.get(user_id), rating)
             for user_id, rating in await self.bot.user_db.get_duelists(ctx.guild.id)
         ]
         users = [
@@ -1281,9 +1307,9 @@ class Dueling(commands.Cog):
         if rc == 0:
             raise DuelCogError(f'Unable to invalidate duel {duelid}.')
 
-        challenger = ctx.guild.get_member(challenger_id)
+        challenger = await discord_common.fetch_member(ctx.guild, challenger_id)
         challenger_mention = challenger.mention if challenger is not None else str(challenger_id)
-        challengee = ctx.guild.get_member(challengee_id)
+        challengee = await discord_common.fetch_member(ctx.guild, challengee_id)
         challengee_mention = challengee.mention if challengee is not None else str(challengee_id)
         await ctx.send(
             f'Duel between {challenger_mention} and'
@@ -1325,15 +1351,26 @@ class Dueling(commands.Cog):
 
     # TODO: Add _invalidate by cfhandle
     # rating does not plot rating changes through lockouts
-    @duel.command(brief='Plot rating', usage='[duelist]', with_app_command=False)
-    async def rating(self, ctx: commands.Context, *members: discord.Member) -> None:
+    @duel.command(brief='Plot rating', usage='[duelist]')
+    async def rating(
+        self,
+        ctx: commands.Context,
+        member1: discord.Member | None = None,
+        member2: discord.Member | None = None,
+        member3: discord.Member | None = None,
+        member4: discord.Member | None = None,
+        member5: discord.Member | None = None,
+    ) -> None:
         """Plot duelist's rating."""
         assert isinstance(ctx.author, discord.Member)
-        members = members or (ctx.author,)
-        if len(members) > 5:
-            raise DuelCogError('Cannot plot more than 5 duelists at once.')
+        members = tuple(
+            m
+            for m in (member1, member2, member3, member4, member5)
+            if m is not None
+        ) or (ctx.author,)
 
         duelists = [member.id for member in members]
+        members_by_id = {member.id: member for member in members}
         duels = await self.bot.user_db.get_complete_official_duels(ctx.guild.id)
         rating: dict[int, int] = {}
         plot_data = defaultdict(list)
@@ -1387,7 +1424,7 @@ class Dueling(commands.Cog):
         labels = [
             gc.StrWrap(
                 '{} ({})'.format(
-                    ctx.guild.get_member(duelist).display_name, rating_data[-1][1]
+                    members_by_id[duelist].display_name, rating_data[-1][1]
                 )
             )
             for duelist, rating_data in plot_data.items()
