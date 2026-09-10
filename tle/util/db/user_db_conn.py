@@ -1520,7 +1520,7 @@ class UserDbConn:
 
     async def train_get_num_solves(self, training_id: int) -> int:
         query = f"""
-            SELECT COUNT(*) FROM training_problems
+            SELECT COUNT(*) AS cnt FROM training_problems
             WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED}
         """
         cursor = await self.conn.execute(query, (training_id,))
@@ -1528,7 +1528,7 @@ class UserDbConn:
 
     async def train_get_num_skips(self, training_id: int) -> int:
         query = f"""
-            SELECT COUNT(*) FROM training_problems
+            SELECT COUNT(*) AS cnt FROM training_problems
             WHERE training_id = ? AND status == {TrainingProblemStatus.SKIPPED}
         """
         cursor = await self.conn.execute(query, (training_id,))
@@ -1536,7 +1536,7 @@ class UserDbConn:
 
     async def train_get_num_slow_solves(self, training_id: int) -> int:
         query = f"""
-            SELECT COUNT(*) FROM training_problems
+            SELECT COUNT(*) AS cnt FROM training_problems
             WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED_TOO_SLOW}
         """
         cursor = await self.conn.execute(query, (training_id,))
@@ -1552,7 +1552,7 @@ class UserDbConn:
 
     async def train_get_max_rating(self, training_id: int) -> int:
         query = f"""
-            SELECT MAX(rating) FROM training_problems
+            SELECT MAX(rating) AS max_rating FROM training_problems
             WHERE training_id = ? AND status == {TrainingProblemStatus.SOLVED}
         """
         cursor = await self.conn.execute(query, (training_id,))
@@ -1560,7 +1560,7 @@ class UserDbConn:
 
     async def train_get_fastest_solves(self) -> list[Any]:
         query = f"""
-            SELECT tr.user_id, tp.rating, min(tp.finish_time - tp.issue_time)
+            SELECT tr.user_id, tp.rating, MIN(tp.finish_time - tp.issue_time) AS fastest
             FROM training_problems tp, trainings tr
             WHERE tp.training_id = tr.id
             AND (tp.status = {TrainingProblemStatus.SOLVED}
