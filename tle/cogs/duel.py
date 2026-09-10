@@ -696,11 +696,15 @@ class Dueling(commands.Cog):
         return min(subs, key=lambda sub: sub.creationTimeSeconds).creationTimeSeconds
 
     @duel.command(
-        brief='Give up the duel (only for duels with handicap). Can only be used'
-        ' by the lower rated duelist after the higher rated duelist has solved'
-        ' the problem.',
+        # Discord caps slash command descriptions at 100 characters, and the
+        # brief is what gets uploaded -- keep the long form in the docstring.
+        brief='Give up a handicap duel',
     )
     async def giveup(self, ctx: commands.Context) -> None:
+        """Give up the duel. Only for duels with a handicap, and only usable by
+        the lower rated duelist after the higher rated duelist has solved the
+        problem.
+        """
         # check if we are in the correct channel
         await self._checkIfCorrectChannel(ctx)
 
