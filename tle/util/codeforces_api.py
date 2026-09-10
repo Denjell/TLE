@@ -419,14 +419,22 @@ def cf_ratelimit(f: Callable[..., Any]) -> Callable[..., Any]:
 
 
 @cf_ratelimit
-async def _query_api(path: str, data: Any = None) -> Any:
+async def _query_api(path: str, data: Any = None, *, method: str = 'post') -> Any:
+    """Queries the CF API. POST by default, since it lifts the URL length
+    limit on parameters such as user.info's handle list. `contest.standings`
+    is the exception and must use GET, see `contest.standings`.
+    """
     url = API_BASE_URL + path
     try:
         logger.info(f'Querying CF API at {url} with {data}')
         # Explicitly state encoding (though aiohttp accepts gzip by default)
         headers = {'Accept-Encoding': 'gzip'}
         assert _session is not None, 'Session not initialized. Call initialize() first.'
-        async with _session.post(url, data=data, headers=headers) as resp:
+        if method == 'get':
+            request = _session.get(url, params=data, headers=headers)
+        else:
+            request = _session.post(url, data=data, headers=headers)
+        async with request as resp:
             try:
                 respjson = await resp.json()
             except aiohttp.ContentTypeError:
@@ -480,19 +488,24 @@ class contest:
         room: Any | None = None,
         show_unofficial: bool | None = None,
     ) -> tuple[Contest, list[Problem], list[RanklistRow]]:
+        # Codeforces serves non-gym standings to unauthenticated clients only
+        # as a GET carrying contestId and nothing else -- a POST, or any extra
+        # parameter, is answered with HTTP 400 ("available only via anonymous
+        # GET requests with no extra parameters"). from_/count merely trim the
+        # response, so dropping them costs bandwidth and nothing else. The
+        # others decide which rows come back, so say so rather than hand out a
+        # ranklist that is quietly missing participants. All of them become
+        # available again once the request is signed with CF API credentials.
+        if handles is not None or room is not None or show_unofficial:
+            logger.warning(
+                f'contest.standings for contest {contest_id} requested'
+                ' handles/room/showUnofficial, which Codeforces accepts only'
+                ' from authenticated clients. Returning official standings'
+                ' only; virtual and out-of-competition rows are missing.'
+            )
         params = {'contestId': contest_id}
-        if from_ is not None:
-            params['from'] = from_
-        if count is not None:
-            params['count'] = count
-        if handles is not None:
-            params['handles'] = ';'.join(handles)
-        if room is not None:
-            params['room'] = room
-        if show_unofficial is not None:
-            params['showUnofficial'] = _bool_to_str(show_unofficial)
         try:
-            resp = await _query_api('contest.standings', params)
+            resp = await _query_api('contest.standings', params, method='get')
         except TrueApiError as e:
             if 'not found' in e.comment:
                 raise ContestNotFoundError(e.comment, contest_id)
