@@ -448,6 +448,11 @@ class Codeforces(commands.Cog):
         user_rating = round(user.effective_rating, -2)
         user_rating = max(800, user_rating)
         user_rating = min(3500, user_rating)
+        # The problem search spans 800-3500, but points are scored against a
+        # tighter band, so that users at either extreme don't collect the
+        # 8-point "same rating as me" delta for problems that are trivial or
+        # near-impossible for everyone else.
+        score_rating = min(3000, max(1100, user_rating))
         submissions = await cf.user.status(handle=handle)
         solved = {sub.problem.name for sub in submissions}
         noguds = await self.bot.user_db.get_noguds(ctx.message.author.id)
@@ -513,7 +518,7 @@ class Codeforces(commands.Cog):
         tags = [tag for tag in tags if tag not in DIV_TAGS]
         bantags = [tag for tag in bantags if tag not in DIV_TAGS]
 
-        delta = problems[choice].rating - rating
+        delta = problems[choice].rating - score_rating
         if tags or bantags:
             delta = delta - 200
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)

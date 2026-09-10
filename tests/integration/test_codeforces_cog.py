@@ -233,3 +233,134 @@ class TestGimme:
 
         with pytest.raises(CodeforcesCogError, match='not found'):
             await cog.gimme.callback(cog, ctx)
+
+
+# --- gitgud command body ---
+
+
+class TestGitgudCommand:
+    """Exercises the command itself, not just the _gitgud helper.
+
+    The delta decides how many gitgud points a solve is worth, and it is
+    measured against the user's rating clamped to 1100-3000 -- a tighter band
+    than the 800-3500 the problem search uses -- so users at either extreme
+    can't collect the 8-point "same rating as me" reward for problems that are
+    trivial or near-impossible for everyone else.
+    """
+
+    @staticmethod
+    def _mock_cf_common(mock_cf_common):
+        mock_cf_common.resolve_handles = AsyncMock(return_value=['tourist'])
+        mock_cf_common.parse_tags.return_value = []
+        mock_cf_common.is_contest_writer.return_value = False
+        mock_cf_common.is_nonstandard_problem.return_value = False
+        mock_cf_common.user_guard = MagicMock(side_effect=lambda **kwargs: lambda f: f)
+        mock_cf_common.active_groups = {}
+
+    @patch('tle.cogs.codeforces.cf')
+    @patch('tle.cogs.codeforces.cf_common')
+    async def test_delta_is_problem_rating_minus_user_rating(
+        self, mock_cf_common, mock_cf, cog_env
+    ):
+        cog, ctx, bot, _ = cog_env
+        self._mock_cf_common(mock_cf_common)
+        mock_cf.user.status = AsyncMock(return_value=[])
+        cog._gitgud = AsyncMock()
+
+        # cog_env's user is rated 3000, well inside the scoring band.
+        await cog.gitgud.callback(cog, ctx, args='3200')
+
+        _, _, problem, delta, hidden = cog._gitgud.await_args.args
+        assert problem.rating == 3200
+        assert delta == 200
+        assert hidden is False
+
+    @patch('tle.cogs.codeforces.cf')
+    @patch('tle.cogs.codeforces.cf_common')
+    async def test_delta_uses_lower_clamp_for_low_rated_user(
+        self, mock_cf_common, mock_cf, cog_env
+    ):
+        cog, ctx, bot, _ = cog_env
+        self._mock_cf_common(mock_cf_common)
+        mock_cf.user.status = AsyncMock(return_value=[])
+        cog._gitgud = AsyncMock()
+
+        await bot.user_db.cache_cf_user(_make_user(handle='tourist', rating=800))
+        bot.cf_cache.problem_cache.problems = [
+            _make_problem(contestId=1, index='A', name='Trivial', rating=800)
+        ]
+
+        await cog.gitgud.callback(cog, ctx, args='800')
+
+        # 800 rating clamps up to 1100 for scoring, so 800 - 1100 = -300,
+        # the lowest point bracket, rather than a delta of 0.
+        _, _, problem, delta, _ = cog._gitgud.await_args.args
+        assert problem.rating == 800
+        assert delta == -300
+
+    @patch('tle.cogs.codeforces.cf')
+    @patch('tle.cogs.codeforces.cf_common')
+    async def test_delta_uses_upper_clamp_for_high_rated_user(
+        self, mock_cf_common, mock_cf, cog_env
+    ):
+        cog, ctx, bot, _ = cog_env
+        self._mock_cf_common(mock_cf_common)
+        mock_cf.user.status = AsyncMock(return_value=[])
+        cog._gitgud = AsyncMock()
+
+        await bot.user_db.cache_cf_user(_make_user(handle='tourist', rating=3500))
+
+        await cog.gitgud.callback(cog, ctx, args='3200')
+
+        # 3500 clamps down to 3000, so 3200 - 3000 = 200.
+        _, _, _, delta, _ = cog._gitgud.await_args.args
+        assert delta == 200
+
+    @patch('tle.cogs.codeforces.cf')
+    @patch('tle.cogs.codeforces.cf_common')
+    async def test_rating_range_marks_challenge_hidden(
+        self, mock_cf_common, mock_cf, cog_env
+    ):
+        cog, ctx, bot, _ = cog_env
+        self._mock_cf_common(mock_cf_common)
+        mock_cf.user.status = AsyncMock(return_value=[])
+        cog._gitgud = AsyncMock()
+
+        await cog.gitgud.callback(cog, ctx, args='3000-3200')
+
+        *_, hidden = cog._gitgud.await_args.args
+        assert hidden is True
+
+    @patch('tle.cogs.codeforces.cf')
+    @patch('tle.cogs.codeforces.cf_common')
+    async def test_tag_filter_reduces_delta(self, mock_cf_common, mock_cf, cog_env):
+        cog, ctx, bot, _ = cog_env
+        self._mock_cf_common(mock_cf_common)
+        # Required tags come from the '+' prefix, banned ones from '~'.
+        mock_cf_common.parse_tags.side_effect = (
+            lambda args, prefix: ['dp'] if prefix == '+' else []
+        )
+        mock_cf.user.status = AsyncMock(return_value=[])
+        cog._gitgud = AsyncMock()
+
+        bot.cf_cache.problem_cache.problems = [
+            _make_problem(contestId=1, index='D', name='Tagged', rating=3200,
+                          tags=['dp'])
+        ]
+
+        await cog.gitgud.callback(cog, ctx, args='3200 +dp')
+
+        # Filtering by tag makes the problem easier to find, so it is worth
+        # 200 less: 3200 - 3000 - 200.
+        _, _, _, delta, _ = cog._gitgud.await_args.args
+        assert delta == 0
+
+    @patch('tle.cogs.codeforces.cf')
+    @patch('tle.cogs.codeforces.cf_common')
+    async def test_negative_argument_rejected(self, mock_cf_common, mock_cf, cog_env):
+        cog, ctx, bot, _ = cog_env
+        self._mock_cf_common(mock_cf_common)
+        mock_cf.user.status = AsyncMock(return_value=[])
+
+        with pytest.raises(CodeforcesCogError, match='instead of delta'):
+            await cog.gitgud.callback(cog, ctx, args='-300')
