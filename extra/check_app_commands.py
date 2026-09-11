@@ -21,6 +21,7 @@ otherwise only surface against the live API.
 """
 
 import asyncio
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -88,6 +89,48 @@ def count_commands(command):
     return 1
 
 
+def check_callbacks_accept_keywords(bot, problems):
+    """Catch decorators that forward only positional arguments.
+
+    A prefix invocation passes a command's arguments positionally, but an app
+    command invocation passes them by keyword. A decorator wrapping the
+    callback as (cog, ctx, *args) therefore works on the prefix path and raises
+    TypeError on the slash path, which discord.py surfaces as
+    CommandSignatureMismatch -- an error that points at the command tree and
+    says nothing about the decorator actually responsible.
+
+    discord.py derives a command's parameters through __wrapped__, so the tree
+    looks correct and building it proves nothing. The real callback has to be
+    inspected with follow_wrapped=False.
+    """
+    for command in bot.walk_commands():
+        if not isinstance(command, (commands.HybridCommand, commands.HybridGroup)):
+            continue
+        if not command.clean_params:
+            continue
+        try:
+            actual = inspect.signature(command.callback, follow_wrapped=False)
+        except (TypeError, ValueError):
+            continue
+
+        kinds = [p.kind for p in actual.parameters.values()]
+        if inspect.Parameter.VAR_KEYWORD in kinds:
+            continue
+
+        accepted = {
+            name for name, p in actual.parameters.items()
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                          inspect.Parameter.KEYWORD_ONLY)
+        }
+        missing = [n for n in command.clean_params if n not in accepted]
+        if missing:
+            problems.append(
+                f'/{command.qualified_name}: callback cannot receive '
+                f'{", ".join(missing)} by keyword, so the slash invocation '
+                f'raises CommandSignatureMismatch. A decorator is probably '
+                f'forwarding only *args; give it **kwargs too.')
+
+
 async def build_tree(cog_names):
     intents = discord.Intents.default()
     intents.members = True
@@ -123,6 +166,8 @@ async def run(cog_names):
             problems.append(f'/{command.name}: duplicate top-level command')
         seen.add(command.name)
         check_command(command, problems)
+
+    check_callbacks_accept_keywords(bot, problems)
 
     total = sum(count_commands(command) for command in top_level)
     if len(top_level) > MAX_TOP_LEVEL_COMMANDS:

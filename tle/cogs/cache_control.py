@@ -24,11 +24,16 @@ async def _send_possibly_late(ctx, content):
 
 
 def timed_command(coro):
+    # **kwargs matters: a prefix invocation passes the command's arguments
+    # positionally, but an app command invocation passes them by keyword, so a
+    # wrapper taking only *args raises TypeError there. discord.py reports that
+    # as CommandSignatureMismatch, which points at the command tree rather than
+    # at this function.
     @functools.wraps(coro)
-    async def wrapper(cog, ctx, *args):
+    async def wrapper(cog, ctx, *args, **kwargs):
         await ctx.send('Running...')
         begin = time.time()
-        await coro(cog, ctx, *args)
+        await coro(cog, ctx, *args, **kwargs)
         elapsed = time.time() - begin
         await _send_possibly_late(ctx, f'Completed in {elapsed:.2f} seconds')
 
