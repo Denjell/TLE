@@ -5,7 +5,7 @@ description = ""
 authors = ["meooow25 <soumiksarkar.3120@gmail.com>"]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.11"
 "discord.py" = "^2.1.1"
 seaborn = "^0.10.1"
 lxml = "^4.6"

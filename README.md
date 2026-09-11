@@ -47,14 +47,15 @@ Now all dependencies need to be installed. TLE uses [Poetry](https://poetry.eust
 poetry install
 ```
 
-> :warning: **TLE requires Python 3.8 or later!**
+> :warning: **TLE requires Python 3.11 or later!**
 
-If you are using Ubuntu with older versions of python, then do the following:
+If your distribution's default python is older or newer than 3.11, install 3.11
+alongside it and use that interpreter:
 
 ```bash
-apt-get install python3.8-venv libpython3.8-dev
-python3.8 -m pip install poetry
-python3.8 -m poetry install
+apt-get install python3.11-venv libpython3.11-dev
+python3.11 -m pip install poetry
+python3.11 -m poetry install
 ```
 
 On some systems, Poetry is not able to install TLE's dependencies correctly. If you are unable to run `poetry install` without errors after completing the steps below, see the note at the end of the *final steps* section.
@@ -68,6 +69,10 @@ TLE also depends on cairo and pango for graphics and text rendering, which you n
 ```bash
 apt-get install libcairo2-dev libgirepository1.0-dev libpango1.0-dev pkg-config python3-dev gir1.2-pango-1.0
 ```
+
+> On distributions shipping GLib 2.80 or newer (Ubuntu 25.04+, for instance)
+> `libgirepository1.0-dev` no longer installs any headers, and PyGObject builds
+> against `girepository-2.0` instead. Install `libgirepository-2.0-dev` there.
 
 Additionally TLE uses pillow for graphics, which requires the following packages:
 
