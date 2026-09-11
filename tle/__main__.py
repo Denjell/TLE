@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import distutils.util
 import logging
 import os
 import discord
