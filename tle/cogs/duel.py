@@ -172,8 +172,8 @@ class Dueling(commands.Cog):
             await self._check_duel_complete(guild, channel, entry, True)
                     
 
-    @commands.group(brief='Duel commands',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Duel commands',
+                           invoke_without_command=True)
     async def duel(self, ctx):
         """Group for commands pertaining to duels"""
         await ctx.send_help(ctx.command)
@@ -206,7 +206,7 @@ class Dueling(commands.Cog):
         await ctx.send(embed=embed)
 
     @duel.command(brief='Challenge to a duel', usage='opponent [rating] [+tag..] [~tag..] [+divX] [~divX] [nohandicap] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def challenge(self, ctx, opponent: discord.Member, *args):
+    async def challenge(self, ctx, opponent: discord.Member, *, args: str = ''):
         """Challenge another server member to a duel. Problem difficulty will be the lesser of duelist ratings minus 400. You can alternatively specify a different rating. 
         All duels will be rated. The challenge expires if ignored for 5 minutes.
         The bot will allow the lower rated duelist to take more time for the duel. 
@@ -237,6 +237,9 @@ class Dueling(commands.Cog):
             raise DuelCogError(
                 f'{opponent.mention} is currently in a duel!')
                 
+        # Slash commands have no variadic parameter, so the filters arrive as
+        # one field and are split here. Prefix invocations are unaffected.
+        args = args.split()
         tags = cf_common.parse_tags(args, prefix='+')
         bantags = cf_common.parse_tags(args, prefix='~')
         rating = cf_common.parse_rating(args)
@@ -388,7 +391,7 @@ class Dueling(commands.Cog):
             return _DUEL_STATUS_TESTING
         return min(subs, key=lambda sub: sub.creationTimeSeconds).creationTimeSeconds
     
-    @duel.command(brief='Give up the duel (only for duels with handicap). Can only be used by the lower rated duelist after the higher rated duelist has solved the problem.')
+    @duel.command(brief='Give up a handicap duel, as the lower rated duelist')
     async def giveup(self, ctx):
         # check if we are in the correct channel
         self._checkIfCorrectChannel(ctx)
@@ -704,7 +707,7 @@ class Dueling(commands.Cog):
         pages = self._paginate_duels(
             data, message, ctx.guild.id, False)
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     @duel.command(brief='Print user dueling history')
     async def history(self, ctx, member: discord.Member = None):
@@ -714,7 +717,7 @@ class Dueling(commands.Cog):
         pages = self._paginate_duels(
             data, message, ctx.guild.id, False)
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     @duel.command(brief='Print a list of recent duels.')
     async def recent(self, ctx):
@@ -722,7 +725,7 @@ class Dueling(commands.Cog):
         pages = self._paginate_duels(
             data, 'list of recent duels', ctx.guild.id, True)
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     @duel.command(brief='Print list of ongoing duels.')
     async def ongoing(self, ctx, member: discord.Member = None):
@@ -749,7 +752,7 @@ class Dueling(commands.Cog):
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(data, 7)]
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     @duel.command(brief="Show duelists")
     async def ranklist(self, ctx):
@@ -786,7 +789,7 @@ class Dueling(commands.Cog):
         pages = [make_page(chunk, k) for k, chunk in enumerate(
             paginator.chunkify(users, _PER_PAGE))]
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     async def invalidate_duel(self, ctx, duelid, challenger_id, challengee_id): 
         rc = cf_common.user_db.invalidate_duel(duelid, ctx.guild.id)
@@ -816,9 +819,10 @@ class Dueling(commands.Cog):
                 f'{ctx.author.mention}, you can no longer invalidate your duel.')
         await self.invalidate_duel(ctx, duelid, challenger_id, challengee_id)
 
-    @duel.command(brief='Invalidate a duel', usage='[duelist]')
+    @duel.command(name='forceinvalidate', aliases=['_invalidate'],
+                  brief="Invalidate another duelist's duel", usage='[duelist]')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def _invalidate(self, ctx, member: discord.Member):
+    async def forceinvalidate(self, ctx, member: discord.Member):
         """Declare an ongoing duel invalid."""
         active = cf_common.user_db.check_duel_complete(member.id, ctx.guild.id)
         if not active:
@@ -830,12 +834,13 @@ class Dueling(commands.Cog):
     # TODO: Add _invalidate by cfhandle
      
     # rating does not plot rating changes through lockouts
-    @duel.command(brief='Plot rating', usage='[duelist]')
-    async def rating(self, ctx, *members: discord.Member):
+    @duel.command(brief='Plot rating', usage='[@user1 @user2 ..]')
+    async def rating(self, ctx, member1: discord.Member = None, member2: discord.Member = None,
+                     member3: discord.Member = None, member4: discord.Member = None,
+                     member5: discord.Member = None):
         """Plot duelist's rating."""
-        members = members or (ctx.author, )
-        if len(members) > 5:
-            raise DuelCogError(f'Cannot plot more than 5 duelists at once.')
+        members = [member for member in (member1, member2, member3, member4, member5)
+                   if member is not None] or [ctx.author]
 
         duelists = [member.id for member in members]
         duels = cf_common.user_db.get_complete_official_duels(ctx.guild.id)

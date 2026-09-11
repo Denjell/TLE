@@ -132,6 +132,13 @@ def check_callbacks_accept_keywords(bot, problems):
 
 
 async def build_tree(cog_names):
+    # tle.util.ranklist imports from codeforces_api while codeforces_api is
+    # still initialising, so whichever cog is loaded first has to be one that
+    # does not enter that cycle from the wrong side. The bot never notices
+    # because __main__ imports codeforces_common before loading any cog; do the
+    # same here so checking a single cog works whatever it is.
+    import tle.util.codeforces_common  # noqa: F401 - imported for its side effect
+
     intents = discord.Intents.default()
     intents.members = True
     bot = commands.Bot(command_prefix=';', intents=intents)
