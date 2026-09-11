@@ -104,6 +104,17 @@ async def bot_error_handler(ctx, exception):
         await ctx.send(embed=embed_alert('Sorry, this command is temporarily disabled'))
     elif isinstance(exception, (cf.CodeforcesApiError, commands.UserInputError)):
         await ctx.send(embed=embed_alert(exception))
+    elif isinstance(exception, commands.CheckFailure):
+        # Mostly MissingRole/MissingAnyRole. Slash commands are listed for
+        # everyone regardless of the roles they require, so an ordinary user
+        # running into this is now routine rather than a sign of something
+        # wrong, and it must not be logged as an exception.
+        #
+        # It also has to produce a visible reply: checks run before the
+        # before_invoke hook that defers interactions, so nothing has
+        # acknowledged the interaction at this point and staying silent shows
+        # up to the user as 'the application did not respond'.
+        await ctx.send(embed=embed_alert('You are not allowed to use this command.'))
     else:
         msg = 'Ignoring exception in command {}:'.format(ctx.command)
         exc_info = type(exception), exception, exception.__traceback__
