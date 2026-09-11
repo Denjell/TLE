@@ -146,6 +146,10 @@ At this point `@TLE <cmd>` works, `;<cmd>` does not, starboard and
 
 ### Stage 2 — Convert cogs to hybrid (one commit per cog)
 
+**Done so far:** `meta`, `cache_control`, `contests`. Remaining: `starboard`
+(blocked on decision 1), `duel`, `handles`, `graphs`, `training`, `codeforces`,
+`lockout`.
+
 Suggested order, easiest first, so the mechanical pattern is established before
 hitting the hard cogs:
 
@@ -187,6 +191,24 @@ application did not respond"*. Many TLE commands are far slower: `plot *`
 changes the semantics of `delete_after`. Also, the interaction token expires
 after 15 minutes — any command that could exceed that must send a real message
 instead of a followup.
+
+**The 15-minute rule needs a pattern, not a one-off.** Any command that replies
+*after* long work can outlive its token. `cache_control` solves it with a
+`_send_possibly_late()` helper that tries `ctx.send` and falls back to
+`ctx.channel.send` on `HTTPException`. Apply the same wherever a reply follows
+a long operation — `cache problemsets all` is the documented ~10-minute case,
+but `ranklist` on a large contest and the `plot` family can get close.
+
+**Decorators must forward `**kwargs`.** A prefix invocation passes a command's
+arguments positionally; an app command invocation passes them by keyword. A
+decorator wrapping the callback as `(cog, ctx, *args)` therefore works on the
+prefix path and raises `TypeError` on the slash path, which discord.py reports
+as `CommandSignatureMismatch` — an error that blames the command tree and never
+mentions the decorator. Building the tree does **not** catch this, because
+discord.py derives parameters through `__wrapped__`; the registered options look
+correct while the call can never succeed. `check_app_commands.py` now inspects
+the real callback with `follow_wrapped=False`. Hit in `cache_control`
+(`timed_command`); `cf_common.user_guard` was already correct.
 
 ### 6.2 Variadic `*args` — 25 commands
 
@@ -236,6 +258,12 @@ string parameter.
 
 ### 6.4 The paginator — 17 call sites
 
+**Status: the minimum fix is done.** `paginate()` takes an optional `ctx` and
+sends the first page through it, which answers the deferred interaction;
+callers without one (the rated vc watcher) keep the channel path. Each cog
+passes `ctx` as it is converted. The button rework below is still open.
+
+
 [paginator.py](tle/util/paginator.py) sends the first page with
 `channel.send()` from a fire-and-forget `asyncio.create_task`
 ([paginator.py:87](tle/util/paginator.py#L87)). Under a slash invocation that
@@ -282,6 +310,34 @@ group's own callback is only reachable as a slash command if given a
   `commands.has_role(TLE_ADMIN)`, which still runs — but they now *appear* in
   everyone's slash picker and fail noisily on use. Consider
   `@app_commands.default_permissions(...)` to hide them.
+
+  A check failure also has to *reply*. Checks run before the `before_invoke`
+  hook that defers, so a silent `MissingRole` leaves the interaction
+  unacknowledged and Discord tells the user the application did not respond —
+  while the log channel gets a traceback for what is now routine. Handled in
+  `discord_common.bot_error_handler` via a `CheckFailure` branch.
+
+### 6.6a Registrations outlive the code that made them
+
+Found the hard way, and none of it is visible from the source tree:
+
+- **Stale global commands.** A previous deployment synced ~36 commands
+  globally. Discord merges global commands into every guild's picker, so they
+  sat beside the guild set, and invoking one this build no longer defines
+  fails with `CommandNotFound` (the user sees *Unknown integration*). Syncing
+  to a guild never touches the global scope. `sync_app_commands` now clears
+  global when guild-scoped, but **the production cutover has the same problem
+  in reverse**, and there it matters more.
+- **The mirror case is unhandled.** Switching from guild-scoped back to global
+  leaves the guild registrations in place, and the guild id is not known at
+  that point to clear them. Plan the cutover deliberately.
+- **Renames orphan their old registration.** `_unregistervc` → `unregistervc`
+  left `_unregistervc` registered until something removed it. Every rename in
+  §6.9 carries this.
+- **Clients cache the command list.** After registrations change, a client may
+  still offer a deleted command and fail with *Unknown integration*. A client
+  reload (Ctrl+R) fixes it. Worth telling users at rollout, so it is not
+  reported as a bot fault.
 
 ### 6.7 Starboard — unavoidable degradation
 
@@ -350,8 +406,12 @@ to dodge Python name shadowing:
 - [contests.py:667](tle/cogs/contests.py#L667) `_unregistervc`.
 - [handles.py:287](tle/cogs/handles.py#L287) `_updatestatus`.
 
-Renaming these changes the prefix command name too — a user-visible break that
-should be listed in the release notes.
+Renaming these changes the prefix command name too. **Better approach than the
+renames proposed above:** give the command the clean name and keep the old one
+as an `alias`, so the slash command reads properly while existing prefix usage
+keeps working. Done for `_unregistervc` → `unregistervc` (alias
+`_unregistervc`); apply the same to the rest. `_nogud` and `duel _invalidate`
+still need genuinely different names, since `nogud` and `invalidate` are taken.
 
 ### 6.10 Descriptions
 
