@@ -69,6 +69,28 @@ def send_error_if(*error_cls):
     return decorator
 
 
+def describe_invocation(ctx):
+    """Rebuild a readable form of the command that was invoked.
+
+    ctx.message.content is empty without the Message Content intent, and for a
+    slash command discord.py synthesises a message that never had content at
+    all, so the raw text a user typed is simply not available any more. The
+    parsed command and its arguments are, and they are what a log reader
+    actually wants.
+    """
+    if ctx.command is None:
+        return '<unknown command>'
+    prefix = '/' if ctx.interaction is not None else _BOT_PREFIX
+    # ctx.args is [cog, ctx, *positional] for a cog command and [ctx,
+    # *positional] otherwise. ctx.kwargs holds the keyword-only parameters.
+    positional = ctx.args[2:] if ctx.cog is not None else ctx.args[1:]
+    parts = [f'{prefix}{ctx.command.qualified_name}']
+    parts += [str(arg) for arg in positional]
+    parts += [f'{name}={value}' for name, value in ctx.kwargs.items()
+              if value is not None]
+    return ' '.join(parts)
+
+
 async def bot_error_handler(ctx, exception):
     if getattr(exception, 'handled', False):
         # Errors already handled in cogs should have .handled = True
@@ -85,10 +107,11 @@ async def bot_error_handler(ctx, exception):
     else:
         msg = 'Ignoring exception in command {}:'.format(ctx.command)
         exc_info = type(exception), exception, exception.__traceback__
-        extra = {
-            "message_content": ctx.message.content,
-            "jump_url": ctx.message.jump_url
-        }
+        extra = {"invocation": describe_invocation(ctx)}
+        if ctx.interaction is None:
+            # A slash command has no real message to jump to; discord.py's
+            # synthetic one would produce a dead link.
+            extra["jump_url"] = ctx.message.jump_url
         logger.exception(msg, exc_info=exc_info, extra=extra)
 
 
