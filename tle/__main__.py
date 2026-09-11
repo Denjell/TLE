@@ -56,6 +56,20 @@ async def sync_app_commands(bot):
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
         logging.info(f'Synced {len(synced)} app commands to guild {guild_id}')
+
+        # Discord merges globally registered commands into every guild's
+        # command picker, so anything a previous deployment registered globally
+        # is still offered here alongside the guild set. Invoking one that this
+        # build no longer defines fails with CommandNotFound. Syncing to a
+        # guild does not touch the global scope, so clear it explicitly.
+        # Checked first because a global sync is a write worth skipping on the
+        # usual restart, where there is nothing to remove.
+        stale = await bot.tree.fetch_commands()
+        if stale:
+            bot.tree.clear_commands(guild=None)
+            await bot.tree.sync()
+            logging.info(f'Removed {len(stale)} stale global app commands: '
+                         f'{", ".join(sorted(command.name for command in stale))}')
     else:
         synced = await bot.tree.sync()
         logging.info(f'Synced {len(synced)} app commands globally, '
