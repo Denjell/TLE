@@ -103,6 +103,16 @@ def _get_ongoing_vc_participants():
         ongoing_vc_participants |= vc_participants
     return ongoing_vc_participants
 
+def _collect_members(ctx, *members):
+    """Drop the unfilled member slots, defaulting to the caller.
+
+    Slash commands have no variadic parameter, so commands that accepted a
+    capped list of members take that many optional parameters instead.
+    """
+    chosen = [member for member in members if member is not None]
+    return chosen or [ctx.author]
+
+
 class Contests(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -196,10 +206,10 @@ class Contests(commands.Cog):
             return
         pages = self._make_contest_pages(contests, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_CONTEST_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, ctx=ctx)
 
-    @commands.group(brief='Commands for listing contests',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands for listing contests',
+                           invoke_without_command=True)
     async def clist(self, ctx):
         await ctx.send_help(ctx.command)
 
@@ -225,18 +235,24 @@ class Contests(commands.Cog):
                                       title='Recently finished contests on Codeforces',
                                       empty_msg='No finished contests found')
 
-    @commands.group(brief='Commands for contest reminders',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands for contest reminders',
+                           invoke_without_command=True)
     async def remind(self, ctx):
         await ctx.send_help(ctx.command)
 
     @remind.command(brief='Set reminder settings')
     @commands.has_role(constants.TLE_ADMIN)
-    async def here(self, ctx, role: discord.Role, *before: int):
+    async def here(self, ctx, role: discord.Role, *, before: str):
         """Sets reminder channel to current channel, role to the given role, and reminder
         times to the given values in minutes."""
         if not role.mentionable:
             raise ContestCogError('The role for reminders must be mentionable')
+        # A slash command has no variadic parameter, so the minutes arrive as
+        # one space separated field. Prefix invocations accept the same text.
+        try:
+            before = [int(value) for value in before.split()]
+        except ValueError:
+            raise ContestCogError('Please provide valid `before` values')
         if not before or any(before_mins <= 0 for before_mins in before):
             raise ContestCogError('Please provide valid `before` values')
         before = sorted(before, reverse=True)
@@ -465,14 +481,14 @@ class Contests(commands.Cog):
 
         return rated_contestants, ranklist
 
-    @commands.command(brief='Show ranklist for given handles and/or server members')
-    async def ranklist(self, ctx, contest_id: int, *args: str):
+    @commands.hybrid_command(brief='Show ranklist for given handles and/or server members')
+    async def ranklist(self, ctx, contest_id: int, *, args: str = ''):
         """
         Shows ranklist for the contest with given contest id. If handles contains
         '+server', all server members are included. No handles defaults to '+server'.
         Use '+official' for only showing rated participants for the round
         """
-        (show_official,), handles = cf_common.filter_flags(args, ['+official'])
+        (show_official,), handles = cf_common.filter_flags(args.split(), ['+official'])
         handles = await cf_common.resolve_handles(ctx, self.member_converter, handles, maxcnt=None,
                                                   default_to_all_server=True)
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
@@ -487,10 +503,10 @@ class Contests(commands.Cog):
                                                                                show_unofficial=not show_official)
 
         await wait_msg.delete()
-        await ctx.channel.send(embed=self._make_contest_embed_for_ranklist(ranklist))
-        await self._show_ranklist(channel=ctx.channel, contest_id=contest_id, handles=handles, ranklist=ranklist)
+        await ctx.send(embed=self._make_contest_embed_for_ranklist(ranklist))
+        await self._show_ranklist(channel=ctx.channel, contest_id=contest_id, handles=handles, ranklist=ranklist, ctx=ctx)
 
-    async def _show_ranklist(self, channel, contest_id: int, handles: list[str], ranklist, vc: bool = False, delete_after: float = None):
+    async def _show_ranklist(self, channel, contest_id: int, handles: list[str], ranklist, vc: bool = False, delete_after: float = None, ctx=None):
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
         if ranklist is None:
             raise ContestCogError('No ranklist to show')
@@ -522,13 +538,24 @@ class Contests(commands.Cog):
 
         problem_indices = [problem.index for problem in ranklist.problems]
         pages = self._make_standings_pages(contest, problem_indices, handle_standings, deltas)
-        paginator.paginate(self.bot, channel, pages, wait_time=_STANDINGS_PAGINATE_WAIT_TIME, delete_after=delete_after)
+        paginator.paginate(self.bot, channel, pages, wait_time=_STANDINGS_PAGINATE_WAIT_TIME, delete_after=delete_after, ctx=ctx)
 
-    @commands.command(brief='Start a rated vc.', usage='<contest_id> <@user1 @user2 ...>')
-    async def ratedvc(self, ctx, contest_id: int, *members: discord.Member):
+    async def _resolve_members(self, ctx, members):
+        """Turn a space separated string of mentions into Member objects.
+
+        ratedvc takes an unbounded number of members, which a slash command
+        cannot express, so they arrive as one text field. Anything unresolvable
+        raises MemberNotFound, which the error handler reports as user input.
+        """
+        return [await self.member_converter.convert(ctx, token)
+                for token in members.split()]
+
+    @commands.hybrid_command(brief='Start a rated vc.', usage='<contest_id> <@user1 @user2 ...>')
+    async def ratedvc(self, ctx, contest_id: int, *, members: str = ''):
         ratedvc_channel_id = cf_common.user_db.get_rated_vc_channel(ctx.guild.id)
         if not ratedvc_channel_id or ctx.channel.id != ratedvc_channel_id:
             raise ContestCogError('You must use this command in ratedvc channel.')
+        members = await self._resolve_members(ctx, members)
         if not members:
             raise ContestCogError('Missing members')
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
@@ -664,9 +691,11 @@ class Contests(commands.Cog):
         for rated_vc_id in ongoing_rated_vcs:
             await self._watch_rated_vc(rated_vc_id)
 
-    @commands.command(brief='Unregister this user from an ongoing ratedvc', usage='@user')
+    @commands.hybrid_command(name='unregistervc', aliases=['_unregistervc'],
+                             brief='Unregister this user from an ongoing ratedvc',
+                             usage='@user')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def _unregistervc(self, ctx, user: discord.Member):
+    async def unregistervc(self, ctx, user: discord.Member):
         """ Unregister this user from an ongoing ratedvc.
         """
         ongoing_vc_member_ids = _get_ongoing_vc_participants()
@@ -675,7 +704,7 @@ class Contests(commands.Cog):
         cf_common.user_db.remove_last_ratedvc_participation(user.id)
         await ctx.send(embed=discord_common.embed_success(f'Successfully unregistered {user.mention} from the ongoing vc.'))
 
-    @commands.command(brief='Set the rated vc channel to the current channel')
+    @commands.hybrid_command(brief='Set the rated vc channel to the current channel')
     @commands.has_role(constants.TLE_ADMIN)
     async def set_ratedvc_channel(self, ctx):
         """ Sets the rated vc channel to the current channel.
@@ -683,7 +712,7 @@ class Contests(commands.Cog):
         cf_common.user_db.set_rated_vc_channel(ctx.guild.id, ctx.channel.id)
         await ctx.send(embed=discord_common.embed_success('Rated VC channel saved successfully'))
 
-    @commands.command(brief='Get the rated vc channel')
+    @commands.hybrid_command(brief='Get the rated vc channel')
     async def get_ratedvc_channel(self, ctx):
         """ Gets the rated vc channel.
         """
@@ -695,7 +724,7 @@ class Contests(commands.Cog):
         embed.add_field(name='Channel', value=channel.mention)
         await ctx.send(embed=embed)
 
-    @commands.command(brief='Show vc ratings')
+    @commands.hybrid_command(brief='Show vc ratings')
     async def vcratings(self, ctx):
         users = [(await self.member_converter.convert(ctx, str(member_id)), handle, cf_common.user_db.get_vc_rating(member_id, default_if_not_exist=False))
                  for member_id, handle in cf_common.user_db.get_handles_for_guild(ctx.guild.id)]
@@ -724,14 +753,15 @@ class Contests(commands.Cog):
             raise ContestCogError('There are no active VCers.')
 
         pages = [make_page(chunk, k) for k, chunk in enumerate(paginator.chunkify(users, _PER_PAGE))]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Plot vc rating for a list of at most 5 users', usage='@user1 @user2 ..')
-    async def vcrating(self, ctx, *members: discord.Member):
+    @commands.hybrid_command(brief='Plot vc rating for a list of at most 5 users',
+                             usage='[@user1 @user2 ..]')
+    async def vcrating(self, ctx, member1: discord.Member = None, member2: discord.Member = None,
+                       member3: discord.Member = None, member4: discord.Member = None,
+                       member5: discord.Member = None):
         """Plots VC rating for at most 5 users."""
-        members = members or (ctx.author, )
-        if len(members) > 5:
-            raise ContestCogError('Cannot plot more than 5 VCers at once.')
+        members = _collect_members(ctx, member1, member2, member3, member4, member5)
         plot_data = defaultdict(list)
 
         min_rating = 1100
@@ -782,12 +812,13 @@ class Contests(commands.Cog):
     async def cog_command_error(self, ctx, error):
         pass
 
-    @commands.command(brief='Plot vc performance for a list of at most 5 users', aliases=['vcperf'], usage='@user1 @user2 ..')
-    async def vcperformance(self, ctx, *members: discord.Member):
+    @commands.hybrid_command(brief='Plot vc performance for a list of at most 5 users',
+                             aliases=['vcperf'], usage='[@user1 @user2 ..]')
+    async def vcperformance(self, ctx, member1: discord.Member = None, member2: discord.Member = None,
+                            member3: discord.Member = None, member4: discord.Member = None,
+                            member5: discord.Member = None):
         """Plots VC performance for at most 5 users."""
-        members = members or (ctx.author, )
-        if len(members) > 5:
-            raise ContestCogError('Cannot plot more than 5 VCers at once.')
+        members = _collect_members(ctx, member1, member2, member3, member4, member5)
         plot_data = defaultdict(list)
 
         min_rating = 1100
@@ -837,7 +868,7 @@ class Contests(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
 
-    @commands.command(brief='Estimation of contest problem ratings', aliases=['probrat'], usage='contest_id')
+    @commands.hybrid_command(brief='Estimation of contest problem ratings', aliases=['probrat'], usage='contest_id')
     async def problemratings(self, ctx, contest_id: int):
         """Estimation of contest problem ratings
         """
