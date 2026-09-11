@@ -9,6 +9,14 @@ from discord.ext import commands
 from tle import constants
 from tle.util.codeforces_common import pretty_time_format
 
+# Exit codes are how the bot asks its supervisor what to do next: a non-zero
+# one means bring it back up, zero means stay down. docker-compose.yaml's
+# `restart: on-failure` policy is what acts on that distinction, so the two
+# values must not be conflated. 42 is inherited from the run.sh loop that
+# used to serve this purpose before the bot was containerised.
+_RESTART_EXIT_CODE = 42
+_SHUTDOWN_EXIT_CODE = 0
+
 
 # Adapted from numpy sources.
 # https://github.com/numpy/numpy/blob/master/setup.py#L64-85
@@ -53,13 +61,27 @@ class Meta(commands.Cog):
         """Command the bot or get information about the bot."""
         await ctx.send_help(ctx.command)
 
+    @meta.command(brief='Restart TLE')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def restart(self, ctx: commands.Context) -> None:
+        """Restarts the bot.
+
+        The bot shuts down and exits non-zero; bringing it back up is the
+        supervisor's job. Under Docker that is the `restart: on-failure`
+        policy in docker-compose.yaml. Running the bot without a supervisor,
+        this stops it just like `kill` does.
+        """
+        await ctx.send('Restarting...')
+        await self.bot.close()
+        sys.exit(_RESTART_EXIT_CODE)
+
     @meta.command(brief='Kill TLE')
     @commands.has_role(constants.TLE_ADMIN)
     async def kill(self, ctx: commands.Context) -> None:
-        """Shuts down the bot gracefully."""
+        """Shuts down the bot gracefully, and leaves it down."""
         await ctx.send('Shutting down...')
         await self.bot.close()
-        sys.exit(0)
+        sys.exit(_SHUTDOWN_EXIT_CODE)
 
     @meta.command(brief='Is TLE up?')
     async def ping(self, ctx: commands.Context) -> None:

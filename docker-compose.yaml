@@ -11,7 +11,11 @@ services:
     volumes:
       - ./data:/bot/data
 
-    restart: no
+    # `;meta restart` exits 42 and `;meta kill` exits 0, so this policy is
+    # what makes the difference between the two: a non-zero exit is brought
+    # back up, a clean one is left down. Crashes are restarted too, which the
+    # old run.sh loop did not do.
+    restart: on-failure
 
     logging:
       driver: json-file
