@@ -77,7 +77,11 @@ apt-get install libjpeg-dev zlib1g-dev
 
 ### Final steps
 
-You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. Finally, go to the `Bot` settings in your App's Developer Portal (in the same page where you copied your Bot Token) and enable the `Server Members Intent` and `Message Content Intent`.
+You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. Finally, go to the `Bot` settings in your App's Developer Portal (in the same page where you copied your Bot Token) and enable the `Server Members Intent`.
+
+> :warning: TLE no longer requests the privileged `Message Content Intent`, and leaving it enabled changes nothing. Because of that, Discord does not deliver the text of ordinary messages to the bot, so the `;` prefix only works when the message also mentions the bot (`@TLE gimme 1500`). Use the slash commands instead.
+>
+> :warning: When inviting the bot, the invite URL **must** include the `applications.commands` scope in addition to `bot` (i.e. `&scope=bot%20applications.commands`). Without it Discord will not show TLE's slash commands, no matter what the bot does. A bot invited before this change has to be re-invited with the extra scope; this does not kick it from the server or reset its roles.
 
 Create a new file `environment`.
 

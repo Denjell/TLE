@@ -56,9 +56,17 @@ async def main():
 
     setup()
     
+    # The privileged Message Content intent is deliberately not requested, so
+    # that TLE can run on deployments where it is not granted. Discord then only
+    # delivers message content for messages that mention the bot, which means
+    # the ';' prefix below effectively only fires on '@TLE <command>'. Commands
+    # are being migrated to slash commands, which need no message content.
+    # See NoMessageContentIntent.md.
+    #
+    # The Members intent is still privileged and still requested; removing it is
+    # a separate phase.
     intents = discord.Intents.default()
     intents.members = True
-    intents.message_content = True
 
     bot = commands.Bot(command_prefix=commands.when_mentioned_or(discord_common._BOT_PREFIX), intents=intents)
     bot.help_command = discord_common.TleHelp()
