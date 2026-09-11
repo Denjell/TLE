@@ -120,9 +120,8 @@ Verified behaviour, not extrapolation:
 * `wsl --shutdown` followed by starting the distro — the Docker service comes
   up (it is `systemctl enable`d) and the container with it.
 
-The caveat is WSL itself: Windows does not boot a WSL distro on login. After
-a Windows restart nothing runs until something starts the distro — opening a
-WSL terminal is enough.
+The caveat is WSL itself, which needs more than a restart policy to keep the
+bot up — see [Running under WSL](#running-under-wsl).
 
 ---
 
@@ -192,6 +191,71 @@ Back the database up before an upgrade that changes the schema:
 ```bash
 cp data/db/user.db data/db/user.db.backup
 ```
+
+---
+
+## Running under WSL
+
+WSL2 is not a persistent host. It stops a distribution that nobody is using,
+and the bot goes down with it — no matter what the restart policy says. Two
+separate mechanisms do this, and both have to be dealt with.
+
+### 1 · The VM idle timeout
+
+`vmIdleTimeout` defaults to 60000, so WSL shuts the whole VM down a minute
+after the last session closes. Raise it in `%UserProfile%\.wslconfig`:
+
+```ini
+[wsl2]
+vmIdleTimeout = 2147483647
+```
+
+Microsoft documents this key as a plain number of milliseconds and defines no
+value that disables the timeout. `-1` does not work — it is rejected and the
+60 second default silently stays in force. Use a large positive number.
+
+`wsl --shutdown` is required for a changed `.wslconfig` to be read.
+
+### 2 · Distro termination
+
+Even with the VM alive, WSL ends the distribution and every process in it,
+systemd services included, once no client is attached. `wsl --list --running`
+then reports none. Nothing inside the distro prevents this — not systemd, not
+a `[boot] command` in `wsl.conf`, which runs at boot rather than keeping
+anything alive.
+
+The only remedy is an attached session. For a test run, any open WSL terminal
+does it. For unattended operation, have Windows hold one open at logon —
+a Task Scheduler entry running
+
+```
+wsl.exe -d <distro> -- sleep infinity
+```
+
+launched through a one-line VBScript (`WScript.Shell.Run cmd, 0, False`) so no
+console window appears.
+
+Separately, Windows does not start WSL on login. After a Windows restart
+nothing runs until something launches the distro; the same scheduled task
+solves that too.
+
+### Recognising it
+
+The symptoms point away from the cause. The container exits **0** with no
+traceback, because the bot shuts down cleanly on SIGTERM, and `RestartCount`
+stays **0**, because the Docker service restores the container on boot rather
+than the restart policy acting on a failure. Nothing in the bot's log marks
+the end — the last line is ordinary activity.
+
+What does date the outages precisely is the duel cog's heartbeat, which runs
+every 60 seconds:
+
+```bash
+docker compose logs | grep _check_ongoing_duels_for_guild
+```
+
+Even 60 second spacing means the bot ran continuously. Any larger gap is time
+the distro was not running.
 
 ---
 
