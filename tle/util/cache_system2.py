@@ -341,8 +341,12 @@ class ProblemsetCache:
 
     async def _fetch_for_contest(self, contest_id):
         try:
-            contest, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
-                                                          count=1)
+            # Only the contest and its problems are wanted here, never the
+            # rows. This used to ask for from_=1, count=1 to keep the response
+            # small, but contest.standings now accepts contestId alone, so
+            # those were being dropped before the request and logged as an
+            # error once per contest. The full standings come back either way.
+            contest, problemset, _ = await cf.contest.standings(contest_id=contest_id)
             
             divisions = [div_tag for div_tag in _DIV_TAGS if contest.matches([div_tag])] 
 
