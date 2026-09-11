@@ -4,6 +4,7 @@ import contextlib
 import logging
 import math
 import html
+from typing import Literal
 import cairo
 import gi
 import datetime
@@ -284,9 +285,10 @@ class Handles(commands.Cog):
     async def on_member_remove(self, member):
         cf_common.user_db.set_inactive([(member.guild.id, member.id)])
 
-    @commands.command(brief='update status, mark guild members as active')
+    @commands.hybrid_command(name='updatestatus', aliases=['_updatestatus'],
+                             brief='Update status, mark guild members as active')
     @commands.has_role(constants.TLE_ADMIN)
-    async def _updatestatus(self, ctx):
+    async def updatestatus(self, ctx):
         gid = ctx.guild.id
         active_ids = [m.id for m in ctx.guild.members]
         cf_common.user_db.reset_status(gid)
@@ -334,7 +336,7 @@ class Handles(commands.Cog):
                              return_exceptions=True)
         self.logger.info(f'All guilds updated for contest {contest.id}.')
 
-    @commands.group(brief='Commands that have to do with handles', invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands that have to do with handles', invoke_without_command=True)
     async def handle(self, ctx):
         """Change or collect information about specific handles on Codeforces"""
         await ctx.send_help(ctx.command)
@@ -514,8 +516,8 @@ class Handles(commands.Cog):
             lines += failed
         return discord_common.embed_success('\n'.join(lines))
 
-    @commands.command(brief="Show gudgitters", aliases=["gitgudders", "gitbadders", "gg"], usage="[div1|div2|div3] [+all]")
-    async def gudgitters(self, ctx, *args):
+    @commands.hybrid_command(brief="Show gudgitters", aliases=["gitgudders", "gitbadders", "gg"], usage="[div1|div2|div3] [+all]")
+    async def gudgitters(self, ctx, *, args: str = ''):
         """Show the list of users of gitgud with their scores."""
         res = cf_common.user_db.get_gudgitters()
         res.sort(key=lambda r: r[1], reverse=True)
@@ -571,8 +573,8 @@ class Handles(commands.Cog):
                     if self.dlo <= change.ratingUpdateTimeSeconds < self.dhi]
         return rating_changes
 
-    @commands.command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def monthlygudgitters(self, ctx, *args):
+    @commands.hybrid_command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
+    async def monthlygudgitters(self, ctx, *, args: str = ''):
         """Show the list of users of gitgud with their scores."""
         
         # Calculate time range of given month (d=) or current month
@@ -656,13 +658,13 @@ class Handles(commands.Cog):
         await ctx.send(file=discord_file)
 
     @handle.command(brief="Show all handles")
-    async def list(self, ctx, *countries):
+    async def list(self, ctx, *, countries: str = ''):
         """Shows members of the server who have registered their handles and
         their Codeforces ratings. You can additionally specify a list of countries
         if you wish to display only members from those countries. Country data is
         sourced from codeforces profiles. e.g. ;handle list Croatia Slovenia
         """
-        countries = [country.title() for country in countries]
+        countries = [country.title() for country in countries.split()]
         res = cf_common.user_db.get_cf_users_for_guild(ctx.guild.id)
         users = [(ctx.guild.get_member(user_id), cf_user.handle, cf_user.rating)
                  for user_id, cf_user in res if not countries or cf_user.country in countries]
@@ -676,7 +678,7 @@ class Handles(commands.Cog):
             title += ' from ' + ', '.join(f'`{country}`' for country in countries)
         pages = _make_pages(users, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, ctx=ctx)
 
     @handle.command(brief="Show handles, but prettier")
     async def pretty(self, ctx, page_no: int = None):
@@ -831,8 +833,8 @@ class Handles(commands.Cog):
 
         return embeds
 
-    @commands.group(brief='Commands for role updates',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands for role updates',
+                           invoke_without_command=True)
     async def roleupdate(self, ctx):
         """Group for commands involving role updates."""
         await ctx.send_help(ctx.command)
@@ -847,48 +849,47 @@ class Handles(commands.Cog):
     @roleupdate.command(brief='Enable or disable auto role updates',
                         usage='on|off')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def auto(self, ctx, arg):
+    async def auto(self, ctx, setting: Literal['on', 'off']):
         """Auto role update refers to automatic updating of rank roles when rating
         changes are released on Codeforces. 'on'/'off' disables or enables auto role
         updates.
         """
-        if arg == 'on':
+        if setting == 'on':
             rc = cf_common.user_db.enable_auto_role_update(ctx.guild.id)
             if not rc:
                 raise HandleCogError('Auto role update is already enabled.')
             await ctx.send(embed=discord_common.embed_success('Auto role updates enabled.'))
-        elif arg == 'off':
+        else:
             rc = cf_common.user_db.disable_auto_role_update(ctx.guild.id)
             if not rc:
                 raise HandleCogError('Auto role update is already disabled.')
             await ctx.send(embed=discord_common.embed_success('Auto role updates disabled.'))
-        else:
-            raise ValueError(f"arg must be 'on' or 'off', got '{arg}' instead.")
 
     @roleupdate.command(brief='Publish a rank update for the given contest',
                         usage='here|off|contest_id')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def publish(self, ctx, arg):
+    async def publish(self, ctx, target: str):
         """This is a feature to publish a summary of rank changes and top rating
         increases in a particular contest for members of this server. 'here' will
         automatically publish the summary to this channel whenever rating changes on
         Codeforces are released. 'off' will disable auto publishing. Specifying a
         contest id will publish the summary immediately.
         """
-        if arg == 'here':
+        if target == 'here':
             cf_common.user_db.set_rankup_channel(ctx.guild.id, ctx.channel.id)
             await ctx.send(
                 embed=discord_common.embed_success('Auto rank update publishing enabled.'))
-        elif arg == 'off':
+        elif target == 'off':
             rc = cf_common.user_db.clear_rankup_channel(ctx.guild.id)
             if not rc:
                 raise HandleCogError('Rank update publishing is already disabled.')
             await ctx.send(embed=discord_common.embed_success('Rank update publishing disabled.'))
         else:
             try:
-                contest_id = int(arg)
+                contest_id = int(target)
             except ValueError:
-                raise ValueError(f"arg must be 'here', 'off' or a contest ID, got '{arg}' instead.")
+                raise HandleCogError(
+                    f"Expected 'here', 'off' or a contest ID, got '{target}' instead.")
             await self._publish_now(ctx, contest_id)
 
     async def _publish_now(self, ctx, contest_id):
@@ -931,7 +932,7 @@ class Handles(commands.Cog):
         else:
             raise HandleCogError(f'Invalid action {action}')
 
-    @commands.command(brief='Grants or removes the specified pingable role',
+    @commands.hybrid_command(brief='Grants or removes the specified pingable role',
                       usage='[give/remove] [vc/duel]')
     async def role(self, ctx, action: str, which: str):
         """e.g. ;role remove duel"""
