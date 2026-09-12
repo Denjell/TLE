@@ -6,7 +6,7 @@ import itertools
 import math
 import datetime
 
-from typing import List
+from typing import List, Literal
 
 import discord
 import numpy as np
@@ -223,7 +223,7 @@ class Graphs(commands.Cog):
         self.bot = bot
         self.converter = commands.MemberConverter()
 
-    @commands.group(brief='Graphs for analyzing Codeforces activity',
+    @commands.hybrid_group(brief='Graphs for analyzing Codeforces activity',
                     invoke_without_command=True)
     async def plot(self, ctx):
         """Plot various graphs. Wherever Codeforces handles are accepted it is possible to
@@ -232,8 +232,11 @@ class Graphs(commands.Cog):
         await ctx.send_help('plot')
 
     @plot.command(brief='Plot Codeforces rating graph', usage='[+zoom] [+number] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def rating(self, ctx, *args: str):
+    async def rating(self, ctx, *, args: str = ''):
         """Plots Codeforces rating graph for the handles provided."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
 
         (zoom, number, peak), args = cf_common.filter_flags(args, ['+zoom' , '+number', '+peak'])
         filt = cf_common.SubFilter()
@@ -293,8 +296,11 @@ class Graphs(commands.Cog):
 
 
     @plot.command(brief='Plot Codeforces performance graph', aliases=['perf'], usage='[+zoom] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def performance(self, ctx, *args: str):
+    async def performance(self, ctx, *, args: str = ''):
         """Plots Codeforces performance graph for the handles provided."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
 
         (zoom, peak), args = cf_common.filter_flags(args, ['+zoom' , '+peak'])
         filt = cf_common.SubFilter()
@@ -353,10 +359,13 @@ class Graphs(commands.Cog):
 
     @plot.command(brief='Plot Codeforces extremes graph',
                   usage='[handles] [+solved] [+unsolved] [+nolegend] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def extreme(self, ctx, *args: str):
+    async def extreme(self, ctx, *, args: str = ''):
         """Plots pairs of lowest rated unsolved problem and highest rated solved problem for every
         contest that was rated for the given user.
         """
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
         (solved, unsolved, nolegend), args = cf_common.filter_flags(args, ['+solved', '+unsolved', '+nolegend'])
         legend, = cf_common.negate_flags(nolegend)
         if not solved and not unsolved:
@@ -397,9 +406,12 @@ class Graphs(commands.Cog):
 
     @plot.command(brief="Show histogram of solved problems' rating on CF",
                   usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def solved(self, ctx, *args: str):
+    async def solved(self, ctx, *, args: str = ''):
         """Shows a histogram of solved problems' rating on Codeforces for the handles provided.
         e.g. ;plot solved meooow +contest +virtual +outof +dp"""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
         filt = cf_common.SubFilter()
         args = filt.parse(args)
         handles = args or ('!' + str(ctx.author),)
@@ -449,8 +461,11 @@ class Graphs(commands.Cog):
 
     @plot.command(brief='Show histogram of solved problems on CF over time',
                   usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [phase_days=] [c+marker..] [i+index..]')
-    async def hist(self, ctx, *args: str):
+    async def hist(self, ctx, *, args: str = ''):
         """Shows the histogram of problems solved on Codeforces over time for the handles provided"""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
         filt = cf_common.SubFilter()
         args = filt.parse(args)
         phase_days = 1
@@ -531,8 +546,11 @@ class Graphs(commands.Cog):
 
     @plot.command(brief='Plot count of solved CF problems over time',
                   usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def curve(self, ctx, *args: str):
+    async def curve(self, ctx, *, args: str = ''):
         """Plots the count of problems solved over time on Codeforces for the handles provided."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
         filt = cf_common.SubFilter()
         args = filt.parse(args)
         handles = args or ('!' + str(ctx.author),)
@@ -568,9 +586,12 @@ class Graphs(commands.Cog):
 
     @plot.command(brief='Show history of problems solved by rating',
                   aliases=['chilli'], usage='[handle] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [b=10] [s=3] [c+marker..] [i+index..] [+nolegend]')
-    async def scatter(self, ctx, *args):
+    async def scatter(self, ctx, *, args: str = ''):
         """Plot Codeforces rating overlaid on a scatter plot of problems solved.
         Also plots a running average of ratings of problems solved in practice."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
         (nolegend,), args = cf_common.filter_flags(args, ['+nolegend'])
         legend, = cf_common.negate_flags(nolegend)
         filt = cf_common.SubFilter()
@@ -707,14 +728,13 @@ class Graphs(commands.Cog):
                                 title='Rating distribution of server members')
 
     @plot.command(brief='Show Codeforces rating distribution', usage='[normal/log] [active/all] [contest_cutoff=5]')
-    async def cfdistrib(self, ctx, mode: str = 'log', activity = 'active', contest_cutoff: int = 5):
+    async def cfdistrib(self, ctx, mode: Literal['log', 'normal'] = 'log',
+                        activity: Literal['active', 'all'] = 'active',
+                        contest_cutoff: int = 5):
         """Plots rating distribution of either active or all users on Codeforces, in either normal or log scale.
         Default mode is log, default activity is active (competed in last 90 days)
         Default contest cutoff is 5 (competed at least five times overall)
         """
-        if activity not in ['active', 'all']:
-            raise GraphCogError('Activity should be either `active` or `all`')
-
         time_cutoff = int(time.time()) - CONTEST_ACTIVE_TIME_CUTOFF if activity == 'active' else 0
         handles = cf_common.cache2.rating_changes_cache.get_users_with_more_than_n_contests(time_cutoff, contest_cutoff)
         if not handles:
@@ -729,8 +749,11 @@ class Graphs(commands.Cog):
                                 title=title)
 
     @plot.command(brief='Show percentile distribution on codeforces', usage='[+zoom] [+nomarker] [handles...] [+exact]')
-    async def centile(self, ctx, *args: str):
+    async def centile(self, ctx, *, args: str = ''):
         """Show percentile distribution of codeforces and mark given handles in the plot. If +zoom and handles are given, it zooms to the neighborhood of the handles."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
         (zoom, nomarker, exact), args = cf_common.filter_flags(args, ['+zoom', '+nomarker', '+exact'])
         # Prepare data
         intervals = [(rank.low, rank.high) for rank in cf.RATED_RANKS]
@@ -843,10 +866,11 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
     @plot.command(brief='Plot histogram of gudgiting')
-    async def howgud(self, ctx, *members: discord.Member):
-        members = members or (ctx.author,)
-        if len(members) > 5:
-            raise GraphCogError('Please specify at most 5 gudgitters.')
+    async def howgud(self, ctx, member1: discord.Member = None, member2: discord.Member = None,
+                     member3: discord.Member = None, member4: discord.Member = None,
+                     member5: discord.Member = None):
+        members = [member for member in (member1, member2, member3, member4, member5)
+                   if member is not None] or [ctx.author]
 
         deltas = [[x[0] for x in cf_common.user_db.howgud(member.id)] for member in members]
         labels = [gc.StrWrap(f'{member.display_name}: {len(delta)}')
@@ -871,12 +895,13 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
     @plot.command(brief='Plot distribution of server members by country')
-    async def country(self, ctx, *countries):
+    async def country(self, ctx, *, countries: str = ''):
         """Plots distribution of server members by countries. When no countries are specified, plots
          a bar graph of all members by country. When one or more countries are specified, plots a
          swarmplot of members by country and rating. Only members with registered handles and
          countries set on Codeforces are considered.
          """
+        countries = countries.split()
         max_countries = 8
         if len(countries) > max_countries:
             raise GraphCogError(f'At most {max_countries} countries may be specified.')
@@ -943,10 +968,13 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
     @plot.command(brief='Show rating changes by rank', usage='contest_id [+server] [+zoom] [handles..]')
-    async def visualrank(self, ctx, contest_id: int, *args: str):
+    async def visualrank(self, ctx, contest_id: int, *, args: str = ''):
         """Plot rating changes by rank. Add handles to specify a handle in the plot.
         if arguments contains `+server`, it will include just server members and not all codeforces users.
         Specify `+zoom` to zoom to the neighborhood of handles."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
 
         args = set(args)
         (in_server, zoom), handles = cf_common.filter_flags(args, ['+server', '+zoom'])
@@ -1034,8 +1062,11 @@ class Graphs(commands.Cog):
 
     @plot.command(brief='Show speed of solving problems by rating',
                   usage='[handles...] [+contest] [+virtual] [+outof] [+scatter] [+median] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [s=3]')
-    async def speed(self, ctx, *args):
+    async def speed(self, ctx, *, args: str = ''):
         """Plot time spent on problems of particular rating during contest."""
+        # Slash commands have no variadic parameter, so the filters arrive
+        # as one field. Prefix invocations are unaffected.
+        args = args.split()
 
         (add_scatter, use_median), args = cf_common.filter_flags(args, ['+scatter', '+median'])
         filt = cf_common.SubFilter()
