@@ -266,8 +266,8 @@ class Training(commands.Cog):
         self.bot = bot
         self.converter = commands.MemberConverter()
 
-    @commands.group(brief='Training commands',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Training commands',
+                           invoke_without_command=True)
     async def training(self, ctx):
         """ A training is a game played against the bot. In this game the bot will assign you a codeforces problem that you should solve. If you manage to solve the problem the bot will assign you a harder problem. If you need to skip the problem the bot will lower the difficulty.
             You can start a game by using the ;training start command. The bot will assign you a codeforces problem that you should solve. If you manage to solve the problem you can do ;training solved and the bot will assign you a problem that is 100 points higher rated. If you need editorial / external help or have no idea how to solve it you can do ;training skip. The bot will reduce the difficulty of the next problem by 100 points.
@@ -539,7 +539,7 @@ class Training(commands.Cog):
     @training.command(brief='Start a training session',
                       usage='[rating] [infinite|survival|timed15|timed30|timed60]')
     @cf_common.user_guard(group='training')
-    async def start(self, ctx, *args):
+    async def start(self, ctx, *, args: str = ''):
         """ Start your training session
             - Game modes:
               - infinite: Play the game in infinite mode (you can skip at any time) [DEFAULT]
@@ -556,7 +556,10 @@ class Training(commands.Cog):
         # get user submissions
         submissions = await cf.user.status(handle=handle)
 
-        rating, mode = self._extractArgs(args)
+        # Slash commands have no variadic parameter. Splitting here keeps
+        # _extractArgs order independent, so '1500 survival' and 'survival
+        # 1500' both still work on either path.
+        rating, mode = self._extractArgs(args.split())
 
         gamestate = Game(mode)
 
@@ -572,7 +575,7 @@ class Training(commands.Cog):
 
     @training.command(brief='If you have solved your current problem it will assign a new one')
     @cf_common.user_guard(group='training')
-    async def solved(self, ctx, *args):
+    async def solved(self, ctx):
         """ Use this command if you got AC on the training problem. If game continues the bot will assign a new problem.
         """
 
@@ -699,7 +702,7 @@ class Training(commands.Cog):
             await self._postTrainingStatistics(ctx, latest, handle, gamestate, False, True)
 
     @training.command(brief="Show fastest training solves")
-    async def fastest(self, ctx, *args):
+    async def fastest(self, ctx):
         """Show a list of fastest solves within a training session for each rating."""
         res = cf_common.user_db.train_get_fastest_solves()
         
