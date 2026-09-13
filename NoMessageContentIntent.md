@@ -146,9 +146,11 @@ At this point `@TLE <cmd>` works, `;<cmd>` does not, starboard and
 
 ### Stage 2 — Convert cogs to hybrid (one commit per cog)
 
-**Done so far:** `meta`, `cache_control`, `contests`. Remaining: `starboard`
-(blocked on decision 1), `duel`, `handles`, `graphs`, `training`, `codeforces`,
-`lockout`.
+**Done:** `meta`, `cache_control`, `contests`, `duel`, `handles`, `graphs`,
+`training`, `codeforces`, `lockout` -- 10 of 11, giving 114 application commands
+across 36 top-level entries. The help command (6.5) is done too.
+
+**Remaining: `starboard` only**, deliberately deferred. See 6.7.
 
 Suggested order, easiest first, so the mechanical pattern is established before
 hitting the hard cogs:
@@ -353,16 +355,44 @@ This is the one place where functionality is genuinely lost.
 - Reaction *detection* is unaffected (unprivileged intent), so the trigger still
   fires — it is only the content that is gone.
 
-**Options:**
+**Status: deliberately left undone (2026-09-13).** Everything else in this
+document is finished. Note what that means in practice: the starboard is not
+merely unconverted, it is *quietly* broken. The reaction still fires, then
+every message is rejected and the failure is logged at info level, so from a
+user's side the starboard simply stops working with no explanation. If this
+stays unresolved for long, consider at least making the failure visible.
 
-| Option | Result |
-|---|---|
-| Drop the emptiness guard; post channel + author + jump link only | Starboard works, entries are link-only. **Recommended.** |
-| Remove the starboard cog | Honest but loses a feature people use. |
-| Keep `MESSAGE_CONTENT` enabled just for the starboard | Defeats the entire purpose of this branch. |
+**There is a way to keep full content**, found after this document was first
+written: **message context menu commands**. A right-click -> Apps -> "Star this
+message" command receives the target message inside the interaction payload
+(`interaction.data['resolved']['messages']`, see discord.py's
+`app_commands/namespace.py`), rather than through the gateway cache or a REST
+fetch. That is Discord's documented route for apps that have dropped the
+intent.
 
-**Decision needed from the server owner**, since this is a visible UX change and
-not something the code can paper over.
+It combines well with what still works, because **reaction data is not gated**
+-- the intent covers `content`, `attachments`, `embeds` and `components` only,
+which is why the existing threshold logic is unaffected.
+
+| Option | Trigger | Content | Cost |
+|---|---|---|---|
+| **A. Context menu only** | right-click -> Apps -> Star | full | loses the star-threshold model |
+| **A+. Reactions + context menu** | people react as now; one person right-clicks to publish | full | one explicit action instead of fully automatic |
+| **B. Link-only, automatic** | star threshold, as now | none: channel, author, jump link | fully automatic, entries lose their text |
+| Remove the cog | - | - | honest, but loses a feature people use |
+| Keep `MESSAGE_CONTENT` on for this alone | - | full | defeats the purpose of this branch |
+
+**A+ is the recommendation.** The bot can still verify "this message has >= 5
+stars" when the context menu fires, since it re-fetches the message and
+reaction counts survive, so the social mechanic is unchanged and only the final
+publish step needs a human action. Message commands have their own quota (5 per
+app), so there is no pressure on the 100-command limit.
+
+**Unverified assumption, and the whole design rests on it:** that Discord
+populates `content` in that resolved payload for an app *without* the intent.
+The plumbing is confirmed in discord.py; the Discord-side behaviour is not.
+Test it with a throwaway context menu command before building anything. If
+content does not come through, the answer collapses back to B.
 
 ### 6.8 Lockout `round challenge` — interactive prompt redesign
 
