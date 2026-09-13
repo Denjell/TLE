@@ -301,7 +301,7 @@ class Contests(commands.Cog):
 
     @remind.command(brief='Subscribe to contest reminders')
     async def on(self, ctx):
-        """Subscribes you to contest reminders. Use ';remind settings' to see the current
+        """Subscribes you to contest reminders. Use '/remind settings' to see the current
         settings.
         """
         role = self._get_remind_role(ctx.guild)

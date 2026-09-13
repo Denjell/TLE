@@ -179,7 +179,7 @@ class Round(commands.Cog):
         return embed
     
     def make_round_embed(self, ctx):
-        desc = "Information about Round related commands! **[use ;round <command>]**\n\n"
+        desc = "Information about Round related commands! **[use /round <command>]**\n\n"
         match = self.bot.get_command('round')
 
         for cmd in match.commands:
@@ -187,7 +187,7 @@ class Round(commands.Cog):
         embed = discord.Embed(description=desc, color=discord.Color.dark_magenta())
         embed.set_author(name="Lockout commands help", icon_url=ctx.me.avatar)
         embed.set_footer(
-            text="For detailed usage about a particular command, type ;help round <command>")
+            text="For detailed usage of a command, mention the bot: @TLE help round <command>")
         embed.add_field(name="Based on Lockout bot", value=f"[GitHub](https://github.com/pseudocoder10/Lockout-Bot)",
                         inline=True)
         return embed

@@ -200,7 +200,7 @@ class Dueling(commands.Cog):
         channel_id = cf_common.user_db.get_duel_channel(ctx.guild.id)
         channel = ctx.guild.get_channel(channel_id)
         if channel is None:
-            raise DuelCogError('There is no duel channel. Set one with ;duel set_channel')
+            raise DuelCogError('There is no duel channel. Set one with /duel set_channel')
         embed = discord_common.embed_success('Current duel channel')
         embed.add_field(name='Channel', value=channel.mention)
         await ctx.send(embed=embed)
@@ -536,7 +536,7 @@ class Dueling(commands.Cog):
                 time_remaining_formatted = cf_common.pretty_time_format(
                     time_remaining, always_seconds=True)
                 if not isAutoComplete:
-                    await channel.send(f'{highrated_member.mention} solved it but {lowrated_member.mention} still has {time_remaining_formatted} to solve the problem! Bot will check automatically if the problem has been solved or time is up. {lowrated_member.mention} can also invoke `;duel giveup` if they want to give up.')
+                    await channel.send(f'{highrated_member.mention} solved it but {lowrated_member.mention} still has {time_remaining_formatted} to solve the problem! Bot will check automatically if the problem has been solved or time is up. {lowrated_member.mention} can also invoke `/duel giveup` if they want to give up.')
 
         elif lowrated_timestamp:
             winner = lowrated_member 

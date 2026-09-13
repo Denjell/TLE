@@ -270,8 +270,8 @@ class Training(commands.Cog):
                            invoke_without_command=True)
     async def training(self, ctx):
         """ A training is a game played against the bot. In this game the bot will assign you a codeforces problem that you should solve. If you manage to solve the problem the bot will assign you a harder problem. If you need to skip the problem the bot will lower the difficulty.
-            You can start a game by using the ;training start command. The bot will assign you a codeforces problem that you should solve. If you manage to solve the problem you can do ;training solved and the bot will assign you a problem that is 100 points higher rated. If you need editorial / external help or have no idea how to solve it you can do ;training skip. The bot will reduce the difficulty of the next problem by 100 points.
-            You may end your training at any time with ;training end
+            You can start a game by using the /training start command. The bot will assign you a codeforces problem that you should solve. If you manage to solve the problem you can do /training solved and the bot will assign you a problem that is 100 points higher rated. If you need editorial / external help or have no idea how to solve it you can do /training skip. The bot will reduce the difficulty of the next problem by 100 points.
+            You may end your training at any time with /training end
             The game is available in the following modes: 
             - infinite: Try to get as high as possible. You are allowed to skip any number of times. 
             - survival: Seeking for some thrill? In this mode you only have 3 lives (you can skip 3 problems). How far will you get?
@@ -279,7 +279,7 @@ class Training(commands.Cog):
                           If you need to skip a problem or if you are too slow at solving the problem you will lose one of your 3 lives.
                           Available difficulty levels: timed15 (15 minutes for each problem), timed30 (30 minutes), timed60 (60 minutes)
                           You get some bonus time if you manage to solve a problem within the time limit.
-            For further help on usage of a command do ;help training <command> (e.g. ;help training start)        
+            For further help on a command, mention the bot: @TLE help training <command>        
         """
         await ctx.send_help(ctx.command)
 
@@ -358,7 +358,7 @@ class Training(commands.Cog):
     def _checkTrainingActive(self, ctx, active):
         if not active:
             raise TrainingCogError(
-                'You do not have an active training. You can start one with ;training start')
+                'You do not have an active training. You can start one with /training start')
 
     async def _pickTrainingProblem(self, handle, rating, submissions, user_id):
         solved = {sub.problem.name for sub in submissions}

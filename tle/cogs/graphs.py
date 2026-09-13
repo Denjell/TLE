@@ -408,7 +408,7 @@ class Graphs(commands.Cog):
                   usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
     async def solved(self, ctx, *, args: str = ''):
         """Shows a histogram of solved problems' rating on Codeforces for the handles provided.
-        e.g. ;plot solved meooow +contest +virtual +outof +dp"""
+        e.g. /plot solved meooow +contest +virtual +outof +dp"""
         # Slash commands have no variadic parameter, so the filters arrive
         # as one field. Prefix invocations are unaffected.
         args = args.split()

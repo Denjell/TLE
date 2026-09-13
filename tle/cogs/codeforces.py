@@ -95,15 +95,15 @@ class Codeforces(commands.Cog):
     @commands.hybrid_command(brief='Upsolve a problem')
     @cf_common.user_guard(group='gitgud')
     async def upsolve(self, ctx, choice: int = -1):
-        """Upsolve: The command ;upsolve lists all problems that you haven't solved in contests you participated 
-        - Type ;upsolve for listing all available problems.
-        - Type ;upsolve <nr> for choosing the problem <nr> as gitgud problem (only possible if you have no active gitgud challenge)
-        - After solving the problem you can claim gitgud points for it with ;gotgud
-        - If you can't solve the problem or used external help you should skip it with ;nogud (Available after 2 hours)
-        - The all-time ranklist can be found with ;gitgudders
-        - A monthly ranklist is shown when you type ;monthlygitgudders
-        - Another way to gather gitgud points is ;gitgud (only works if you have no active gitgud-Challenge)
-        - For help with each of the commands you can type ;help <command> (e.g. ;help gitgudders)
+        """Upsolve: The command /upsolve lists all problems that you haven't solved in contests you participated 
+        - Type /upsolve for listing all available problems.
+        - Type /upsolve <nr> for choosing the problem <nr> as gitgud problem (only possible if you have no active gitgud challenge)
+        - After solving the problem you can claim gitgud points for it with /gotgud
+        - If you can't solve the problem or used external help you should skip it with /nogud (Available after 2 hours)
+        - The all-time ranklist can be found with /gitgudders
+        - A monthly ranklist is shown when you type /monthlygitgudders
+        - Another way to gather gitgud points is /gitgud (only works if you have no active gitgud-Challenge)
+        - For help with each of the commands, mention the bot: @TLE help <command> (e.g. help gitgudders)
         
         Point distribution:
         delta  | <-300| -300 | -200 | -100 |  0  |  100 |  200 |>=300
@@ -308,16 +308,16 @@ class Codeforces(commands.Cog):
                       usage='[rating|rating1-rating2] [+tags] [~tags] [+divX] [~divX]')
     @cf_common.user_guard(group='gitgud')
     async def gitgud(self, ctx, *, args: str = ''):
-        """Gitgud: Request a problem with a specific rating with ;gitgud <rating> or within a rating range with ;gitgud <rating1>-<rating2>
+        """Gitgud: Request a problem with a specific rating with /gitgud <rating> or within a rating range with /gitgud <rating1>-<rating2>
         - Points are assigned by difference between problem rating and your current rating (rounded to nearest 100)
         - Filter problems by division with [+divX] [~divX] possible values are div1, div2, div3, div4, edu
         - Filter problems by tags with [+tags] [~tags]
-        - Claim gitgud points once problem is solved with ;gotgud
-        - If you can't solve the problem or used external help you should skip it with ;nogud (Available after 2 hours)
-        - All-time ranklist: ;gitgudders
-        - Monthly ranklist: ;monthlygitgudders
-        - Another way to gather gitgud points is ;upsolve (only works if there is no active gitgud-Challenge)
-        - Get more help with ;help <command> (e.g. ;help gitgudders)
+        - Claim gitgud points once problem is solved with /gotgud
+        - If you can't solve the problem or used external help you should skip it with /nogud (Available after 2 hours)
+        - All-time ranklist: /gitgudders
+        - Monthly ranklist: /monthlygitgudders
+        - Another way to gather gitgud points is /upsolve (only works if there is no active gitgud-Challenge)
+        - Get more help by mentioning the bot: @TLE help <command> (e.g. help gitgudders)
         
         Point distribution:
         rating diff | <-300| -300 | -200 | -100 |   0  |  100 |  200 |>=300
@@ -526,7 +526,7 @@ class Codeforces(commands.Cog):
     @commands.hybrid_command(brief='Recommend a contest', usage='[handles...] [+pattern...]')
     async def vc(self, ctx, *, args: str = ''):
         """Recommends a contest based on Codeforces rating of the handle provided.
-        e.g ;vc mblazev c1729 +global +hello +goodbye +avito"""
+        e.g /vc mblazev c1729 +global +hello +goodbye +avito"""
         # Slash commands have no variadic parameter, so the handles and
         # filters arrive as one field. Prefix invocations are unaffected.
         args = args.split()
@@ -574,7 +574,7 @@ class Codeforces(commands.Cog):
     @commands.hybrid_command(brief="Display unsolved rounds closest to completion", usage='[keywords]')
     async def fullsolve(self, ctx, *, args: str = ''):
         """Displays a list of contests, sorted by number of unsolved problems.
-        Contest names matching any of the provided tags will be considered. e.g ;fullsolve +edu"""
+        Contest names matching any of the provided tags will be considered. e.g /fullsolve +edu"""
         # Slash commands have no variadic parameter, so the handles and
         # filters arrive as one field. Prefix invocations are unaffected.
         args = args.split()
@@ -649,7 +649,7 @@ class Codeforces(commands.Cog):
     async def teamrate(self, ctx, *, args: str = ''):
         """Provides the combined rating of the entire team.
         If +server is provided as the only handle, will display the rating of the entire server.
-        Supports multipliers. e.g: ;teamrate gamegame*1000"""
+        Supports multipliers. e.g: /teamrate gamegame*1000"""
         # Slash commands have no variadic parameter, so the handles and
         # filters arrive as one field. Prefix invocations are unaffected.
         args = args.split()

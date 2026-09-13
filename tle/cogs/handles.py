@@ -272,7 +272,7 @@ class Handles(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.font = ImageFont.truetype(constants.NOTO_SANS_CJK_BOLD_FONT_PATH, size=26) # font for ;handle pretty
+        self.font = ImageFont.truetype(constants.NOTO_SANS_CJK_BOLD_FONT_PATH, size=26) # font for /handle pretty
         self.converter = commands.MemberConverter()
 
     @commands.Cog.listener()
@@ -516,8 +516,10 @@ class Handles(commands.Cog):
             lines += failed
         return discord_common.embed_success('\n'.join(lines))
 
-    @commands.hybrid_command(brief="Show gudgitters", aliases=["gitgudders", "gitbadders", "gg"], usage="[div1|div2|div3] [+all]")
-    async def gudgitters(self, ctx, *, args: str = ''):
+    @commands.hybrid_command(name="gitgudders", brief="Show the all-time gitgud ranklist",
+                             aliases=["gudgitters", "gitbadders", "gg"],
+                             usage="[div1|div2|div3] [+all]")
+    async def gitgudders(self, ctx, *, args: str = ''):
         """Show the list of users of gitgud with their scores."""
         res = cf_common.user_db.get_gudgitters()
         res.sort(key=lambda r: r[1], reverse=True)
@@ -564,7 +566,7 @@ class Handles(commands.Cog):
                 break
 
         if not rankings:
-            raise HandleCogError('No one has completed a gitgud challenge, send ;gitgud to request and ;gotgud to mark it as complete')
+            raise HandleCogError('No one has completed a gitgud challenge, send /gitgud to request and /gotgud to mark it as complete')
         discord_file = get_gudgitters_image(rankings)
         await ctx.send(file=discord_file)
 
@@ -573,8 +575,10 @@ class Handles(commands.Cog):
                     if self.dlo <= change.ratingUpdateTimeSeconds < self.dhi]
         return rating_changes
 
-    @commands.hybrid_command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def monthlygudgitters(self, ctx, *, args: str = ''):
+    @commands.hybrid_command(name="monthlygitgudders", brief="Show the monthly gitgud ranklist",
+                             aliases=["monthlygudgitters", "monthlygg", "monthlygitbadders", "mgg"],
+                             usage="[div1|div2|div3] [d=mmyyyy] [+all]")
+    async def monthlygitgudders(self, ctx, *, args: str = ''):
         """Show the list of users of gitgud with their scores."""
         
         # Calculate time range of given month (d=) or current month
@@ -653,7 +657,7 @@ class Handles(commands.Cog):
                 break
 
         if not rankings:
-            raise HandleCogError('No one has completed a gitgud challenge, send ;gitgud to request and ;gotgud to mark it as complete')
+            raise HandleCogError('No one has completed a gitgud challenge, send /gitgud to request and /gotgud to mark it as complete')
         discord_file = get_gudgitters_image(rankings)
         await ctx.send(file=discord_file)
 
@@ -662,7 +666,7 @@ class Handles(commands.Cog):
         """Shows members of the server who have registered their handles and
         their Codeforces ratings. You can additionally specify a list of countries
         if you wish to display only members from those countries. Country data is
-        sourced from codeforces profiles. e.g. ;handle list Croatia Slovenia
+        sourced from codeforces profiles. e.g. /handle list Croatia Slovenia
         """
         countries = [country.title() for country in countries.split()]
         res = cf_common.user_db.get_cf_users_for_guild(ctx.guild.id)
@@ -935,7 +939,7 @@ class Handles(commands.Cog):
     @commands.hybrid_command(brief='Grants or removes the specified pingable role',
                       usage='[give/remove] [vc/duel]')
     async def role(self, ctx, action: str, which: str):
-        """e.g. ;role remove duel"""
+        """e.g. /role remove duel"""
         if which == 'vc':
             await self._generic_remind(ctx, action, 'Virtual Contestant', 'vc')
         elif which == 'duel':
