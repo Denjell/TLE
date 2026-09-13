@@ -80,7 +80,9 @@ def describe_invocation(ctx):
     """
     if ctx.command is None:
         return '<unknown command>'
-    prefix = '/' if ctx.interaction is not None else _BOT_PREFIX
+    # clean_prefix resolves a mention prefix to '@Bot ', which is what a prefix
+    # invocation actually looks like now that ';' only fires on a mention.
+    prefix = '/' if ctx.interaction is not None else ctx.clean_prefix
     # ctx.args is [cog, ctx, *positional] for a cog command and [ctx,
     # *positional] otherwise. ctx.kwargs holds the keyword-only parameters.
     positional = ctx.args[2:] if ctx.cog is not None else ctx.args[1:]
@@ -174,25 +176,41 @@ async def presence(bot):
     presence_task.start()
 
 class TleHelp(commands.DefaultHelpCommand):
+    """Help formatter for a bot whose commands are slash commands.
+
+    Every command is registered as an application command, while the ';' prefix
+    only fires on a message that also mentions the bot. Rendering ';duel
+    challenge' would therefore tell the reader to type something that does
+    nothing, so signatures are shown in their slash form.
+    """
+
+    def _slash_signature(self, command):
+        signature = f'/{command.qualified_name}'
+        if command.usage:
+            signature += f' {command.usage}'
+        elif command.signature:
+            signature += f' {command.signature}'
+        return signature
+
+    def get_command_signature(self, command):
+        return self._slash_signature(command)
+
     def add_command_formatting(self, command):
-        """A utility function to format the non-indented block of commands and groups.
-
-        Parameters
-        ------------
-        command: :class:`Command`
-            The command to format.
-        """
-
+        """Format the non-indented block of a command or group."""
         if command.description:
             self.paginator.add_line(command.description, empty=True)
 
-        signature = _BOT_PREFIX + command.qualified_name
-        if len(command.aliases) > 0:
-            aliases = '|'.join(command.aliases)
-            signature += '|'+aliases
-        if command.usage:
-            signature += " "+command.usage
-        self.paginator.add_line(signature, empty=True)
+        self.paginator.add_line(self._slash_signature(command), empty=True)
+
+        # Aliases are an ext.commands feature; application commands have no
+        # equivalent, so these only work when mentioning the bot. Listing them
+        # inside the slash signature would be misleading.
+        if command.aliases:
+            mention = self.context.me.display_name if self.context else 'the bot'
+            self.paginator.add_line(
+                f'Aliases (only when mentioning @{mention}): '
+                + ', '.join(command.aliases),
+                empty=True)
 
         if command.help:
             try:
@@ -202,3 +220,8 @@ class TleHelp(commands.DefaultHelpCommand):
                     self.paginator.add_line(line)
                 self.paginator.add_line()
 
+    def get_ending_note(self):
+        prefix = self.context.clean_prefix if self.context else ''
+        mention = self.context.me.display_name if self.context else 'the bot'
+        return (f'Type {prefix}{self.invoked_with} <command> for more info on a command.\n'
+                f'Run any command as /command, or by mentioning the bot: @{mention} command.')
