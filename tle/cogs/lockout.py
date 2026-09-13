@@ -7,6 +7,7 @@ import logging
 
 from functools import cmp_to_key
 from collections import namedtuple
+from typing import Literal
 
 from discord.ext import commands
 from discord.ext.commands import cooldown, BucketType
@@ -147,48 +148,6 @@ class Round(commands.Cog):
             error = f'{busy_members_str} are registered in ongoing lockout rounds.'
             raise RoundCogError(error)
 
-    async def _get_time_response(self, client, ctx, message, time, author, range_):
-        original = await ctx.send(embed=discord.Embed(description=message, color=discord.Color.green()))
-
-        def check(m):
-            if not m.content.isdigit() or not m.author == author:
-                return False
-            i = m.content
-            if int(i) < range_[0] or int(i) > range_[1]:
-                return False
-            return True
-        try:
-            msg = await client.wait_for('message', timeout=time, check=check)
-            await original.delete()
-            return int(msg.content)
-        except asyncio.TimeoutError:
-            await original.delete()
-            raise RoundCogError(f'{ctx.author.mention} you took too long to decide')
-
-    async def _get_seq_response(self, client, ctx, message, time, length, author, range_):
-        original = await ctx.send(embed=discord.Embed(description=message, color=discord.Color.green()))
-
-        def check(m):
-            if m.author != author:
-                return False
-            data = m.content.split()
-            if len(data) != length:
-                return False
-            for i in data:
-                if not i.isdigit():
-                    return False
-                if int(i) < range_[0] or int(i) > range_[1]:
-                    return False
-            return True
-
-        try:
-            msg = await client.wait_for('message', timeout=time, check=check)
-            await original.delete()
-            return [int(x) for x in msg.content.split()]
-        except asyncio.TimeoutError:
-            await original.delete()
-            raise RoundCogError(f'{ctx.author.mention} you took too long to decide')
-
     def _round_problems_embed(self, round_info):
         ranklist = _calc_round_score(list(map(int, round_info.users.split())), list(map(int, round_info.status.split())), list(map(int, round_info.times.split())))
 
@@ -233,7 +192,7 @@ class Round(commands.Cog):
                         inline=True)
         return embed
 
-    @commands.group(brief='Commands related to lockout rounds! Type ;round for more details', invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands related to lockout rounds', invoke_without_command=True)
     async def round(self, ctx):
         await ctx.send(embed=self.make_round_embed(ctx))
 
@@ -275,12 +234,56 @@ class Round(commands.Cog):
         return problem
 
 
-    @round.command(name="challenge", brief="Challenge multiple users to a round", usage="[@user1 @user2...]")
-    async def challenge(self, ctx, *members: discord.Member):
+    @staticmethod
+    def _parse_int_list(text, what, low, high):
+        """Parse a space separated list of integers, bounded to [low, high]."""
+        values = []
+        for token in text.split():
+            try:
+                value = int(token)
+            except ValueError:
+                raise RoundCogError(f'`{token}` is not a valid entry for {what}')
+            if not low <= value <= high:
+                raise RoundCogError(f'Each of the {what} must be between {low} and {high}, got `{value}`')
+            values.append(value)
+        if not values:
+            raise RoundCogError(f'Please provide the {what}')
+        return values
+
+    @round.command(name="challenge", brief="Challenge users to a round",
+                   usage="<ratings> <points> <duration> [yes|no] [@user1 @user2...]")
+    async def challenge(self, ctx, ratings: str, points: str, duration: int,
+                        repeat: Literal['yes', 'no'] = 'no',
+                        member1: discord.Member = None, member2: discord.Member = None,
+                        member3: discord.Member = None, member4: discord.Member = None,
+                        member5: discord.Member = None):
+        """Start a lockout round.
+
+        The round settings used to be collected by asking a series of questions
+        in the channel and reading the replies. The bot no longer receives
+        message content, so they are parameters now, which also removes the
+        30 and 60 second answer deadlines that flow had.
+
+        Give one rating and one point value per problem, e.g. ratings
+        '1500 1600 1700' with points '100 200 300' makes a three problem round.
+        """
         # check if we are in the correct channel
         self._check_if_correct_channel(ctx)
-        
-        members = list(set(members))
+
+        ratings = self._parse_int_list(ratings, 'ratings', LOWER_RATING, UPPER_RATING)
+        points = self._parse_int_list(points, 'points', 100, 10000)
+        if len(ratings) != len(points):
+            raise RoundCogError(f'Got {len(ratings)} rating(s) but {len(points)} point value(s). '
+                                'Give one of each per problem.')
+        if len(ratings) > MAX_PROBLEMS:
+            raise RoundCogError(f'A round can have at most {MAX_PROBLEMS} problems, got {len(ratings)}')
+        if not MATCH_DURATION[0] <= duration <= MATCH_DURATION[1]:
+            raise RoundCogError(f'Duration must be between {MATCH_DURATION[0]} and '
+                                f'{MATCH_DURATION[1]} minutes')
+        repeat = 1 if repeat == 'yes' else 0
+
+        members = list({member for member in (member1, member2, member3, member4, member5)
+                        if member is not None})
         if ctx.author not in members:
             members.append(ctx.author)
         if len(members) > MAX_ROUND_USERS:
@@ -297,16 +300,6 @@ class Round(commands.Cog):
 
         await self._check_if_all_members_ready(ctx, members)           
 
-        problem_cnt = await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} enter the number of problems between [1, {MAX_PROBLEMS}]", 30, ctx.author, [1, MAX_PROBLEMS])
-
-        duration = await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} enter the duration of match in minutes between {MATCH_DURATION}", 30, ctx.author, MATCH_DURATION)
-
-        ratings = await self._get_seq_response(self.bot, ctx, f"{ctx.author.mention} enter {problem_cnt} space seperated integers denoting the ratings of problems (between {LOWER_RATING} and {UPPER_RATING})", 60, problem_cnt, ctx.author, [LOWER_RATING, UPPER_RATING])
-
-        points = await self._get_seq_response(self.bot, ctx, f"{ctx.author.mention} enter {problem_cnt} space seperated integer denoting the points of problems (between 100 and 10,000)", 60, problem_cnt, ctx.author, [100, 10000])
-
-        repeat = await self._get_time_response(self.bot, ctx, f"{ctx.author.mention} do you want a new problem to appear when someone solves a problem (type 1 for yes and 0 for no)", 30, ctx.author, [0, 1])
-
         # pick problems
         submissions = [await cf.user.status(handle=handle) for handle in handles]        
         solved = {sub.problem.name for subs in submissions for sub in subs if sub.verdict != 'COMPILATION_ERROR'} 
@@ -322,9 +315,10 @@ class Round(commands.Cog):
 
         await ctx.send(embed=self._round_problems_embed(round_info))
 
-    @round.command(brief="Invalidate a round (Admin/Mod only)", usage="@user")
+    @round.command(name="invalidate", aliases=["_invalidate"],
+                   brief="Invalidate a round (Admin/Mod only)", usage="@user")
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)  # OK
-    async def _invalidate(self, ctx, member: discord.Member):
+    async def invalidate(self, ctx, member: discord.Member):
         if not cf_common.user_db.check_if_user_in_ongoing_round(ctx.guild.id, member.id):
             raise RoundCogError(f'{member.mention} is not in a round')
         cf_common.user_db.delete_round(ctx.guild.id, member.id)
@@ -531,7 +525,7 @@ class Round(commands.Cog):
         title = 'List of ongoing lockout rounds'
         pages = _make_pages(data, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, ctx=ctx)
 
     @round.command(name="recent", brief="Show recent rounds")
     async def recent(self, ctx, user: discord.Member=None):
@@ -563,7 +557,7 @@ class Round(commands.Cog):
         title = 'List of recent lockout rounds'
         pages = _make_pages(data, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, ctx=ctx)
 
 #     @round.command(name="custom", brief="Challenge to a round with custom problemset")
 #     async def custom(self, ctx, *users: discord.Member):
