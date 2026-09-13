@@ -92,7 +92,7 @@ class Codeforces(commands.Cog):
         embed.add_field(name='Monthly points', value=monthlyPointsStr)
         await ctx.send(f'Challenge problem for `{handle}`', embed=embed)
 
-    @commands.command(brief='Upsolve a problem')
+    @commands.hybrid_command(brief='Upsolve a problem')
     @cf_common.user_guard(group='gitgud')
     async def upsolve(self, ctx, choice: int = -1):
         """Upsolve: The command ;upsolve lists all problems that you haven't solved in contests you participated 
@@ -144,12 +144,15 @@ class Codeforces(commands.Cog):
                 return title, embed
                   
             pages = [make_page(chunk, pi, len(problems)) for pi, chunk in enumerate(paginator.chunkify(problems, 10))]
-            paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)   
+            paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)   
 
-    @commands.command(brief='Recommend a problem',
+    @commands.hybrid_command(brief='Recommend a problem',
                       usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     @cf_common.user_guard(group='gitgud')
-    async def gimme(self, ctx, *args):
+    async def gimme(self, ctx, *, args: str = ''):
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
         rating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
         tags = cf_common.parse_tags(args, prefix='+')
@@ -196,12 +199,15 @@ class Codeforces(commands.Cog):
             embed.add_field(name='Matched tags', value=tagslist)
         await ctx.send(f'Recommended problem for `{handle}`', embed=embed)
 
-    @commands.command(brief='List solved problems',
+    @commands.hybrid_command(brief='List solved problems',
                       usage='[handles] [+hardest] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def stalk(self, ctx, *args):
+    async def stalk(self, ctx, *, args: str = ''):
         """Print problems solved by user sorted by time (default) or rating.
         All submission types are included by default (practice, contest, etc.)
         """
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
         (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
         filt = cf_common.SubFilter(False)
         args = filt.parse(args)
@@ -236,14 +242,17 @@ class Codeforces(commands.Cog):
             return title, embed
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(submissions[:100], 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Create a mashup', usage='[handles] [+tag..] [~tag..] [+divX] [~divX] [?[-]delta]')
-    async def mashup(self, ctx, *args):
+    @commands.hybrid_command(brief='Create a mashup', usage='[handles] [+tag..] [~tag..] [+divX] [~divX] [?[-]delta]')
+    async def mashup(self, ctx, *, args: str = ''):
         """Create a mashup contest using problems within -200 and +400 of average rating of handles provided.
         Add tags with "+" before them.
         Ban tags with "~" before them.
         """
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
         delta = 100
         handles = [arg for arg in args if arg[0] not in '+~?']
         tags = cf_common.parse_tags(args, prefix='+')
@@ -295,10 +304,10 @@ class Codeforces(commands.Cog):
         embed = discord_common.cf_color_embed(description=msg)
         await ctx.send(f'Mashup contest for `{str_handles}`', embed=embed)
 
-    @commands.command(brief='Challenge', aliases=['gitbad'],
+    @commands.hybrid_command(brief='Challenge', aliases=['gitbad'],
                       usage='[rating|rating1-rating2] [+tags] [~tags] [+divX] [~divX]')
     @cf_common.user_guard(group='gitgud')
-    async def gitgud(self, ctx, *args):
+    async def gitgud(self, ctx, *, args: str = ''):
         """Gitgud: Request a problem with a specific rating with ;gitgud <rating> or within a rating range with ;gitgud <rating1>-<rating2>
         - Points are assigned by difference between problem rating and your current rating (rounded to nearest 100)
         - Filter problems by division with [+divX] [~divX] possible values are div1, div2, div3, div4, edu
@@ -316,6 +325,9 @@ class Codeforces(commands.Cog):
         rating diff | <-100| -100 |   0  |  100 |  200 |  300 |  400 |>=500
         tags        |   1  |   2  |   3  |   5  |   8  |  12  |  17  |  23 
         """
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
         user = cf_common.user_db.fetch_cf_user(handle)
         user_rating = round(user.effective_rating, -2)
@@ -379,7 +391,7 @@ class Codeforces(commands.Cog):
             delta = delta - 200
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)
 
-    @commands.command(brief='Print user gitgud history')
+    @commands.hybrid_command(brief='Print user gitgud history')
     async def gitlog(self, ctx, member: discord.Member = None):
         """Displays the list of gitgud problems issued to the specified member, excluding those noguded by admins.
         If the challenge was completed, time of completion and amount of points gained will also be displayed.
@@ -412,9 +424,9 @@ class Codeforces(commands.Cog):
      
 
         pages = [make_page(chunk, score) for chunk in paginator.chunkify(data, 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Print user nogud history')
+    @commands.hybrid_command(brief='Print user nogud history')
     async def nogudlog(self, ctx, member: discord.Member = None):
         """Displays the list of nogud problems issued to the specified member, excluding those noguded by admins.
         """
@@ -442,9 +454,9 @@ class Codeforces(commands.Cog):
         data = [entry for entry in data if entry[1] is None]                
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(data, 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Report challenge completion', aliases=['gotbad'])
+    @commands.hybrid_command(brief='Report challenge completion', aliases=['gotbad'])
     @cf_common.user_guard(group='gitgud')
     async def gotgud(self, ctx):
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -478,7 +490,7 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send('You have already claimed your points')
 
-    @commands.command(brief='Skip challenge', aliases=['toobad'])
+    @commands.hybrid_command(brief='Skip challenge', aliases=['toobad'])
     @cf_common.user_guard(group='gitgud')
     async def nogud(self, ctx):
         await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -496,10 +508,11 @@ class Codeforces(commands.Cog):
         cf_common.user_db.skip_challenge(user_id, challenge_id, Gitgud.NOGUD)
         await ctx.send(f'Challenge skipped.')
 
-    @commands.command(brief='Force skip a challenge')
+    @commands.hybrid_command(name='forceskip', aliases=['_nogud'],
+                      brief="Force skip another user's challenge")
     @cf_common.user_guard(group='gitgud')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def _nogud(self, ctx, member: discord.Member):
+    async def forceskip(self, ctx, member: discord.Member):
         active = cf_common.user_db.check_challenge(member.id)
         if not active:
             await ctx.send(f'No active challenge found for user `{member.display_name}`.')
@@ -510,10 +523,13 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send(f'Failed to force challenge skip.')
 
-    @commands.command(brief='Recommend a contest', usage='[handles...] [+pattern...]')
-    async def vc(self, ctx, *args: str):
+    @commands.hybrid_command(brief='Recommend a contest', usage='[handles...] [+pattern...]')
+    async def vc(self, ctx, *, args: str = ''):
         """Recommends a contest based on Codeforces rating of the handle provided.
         e.g ;vc mblazev c1729 +global +hello +goodbye +avito"""
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
         markers = [x for x in args if x[0] == '+']
         handles = [x for x in args if x[0] != '+'] or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=25)
@@ -553,12 +569,15 @@ class Codeforces(commands.Cog):
             return message, embed
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(contests, 5)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief="Display unsolved rounds closest to completion", usage='[keywords]')
-    async def fullsolve(self, ctx, *args: str):
+    @commands.hybrid_command(brief="Display unsolved rounds closest to completion", usage='[keywords]')
+    async def fullsolve(self, ctx, *, args: str = ''):
         """Displays a list of contests, sorted by number of unsolved problems.
         Contest names matching any of the provided tags will be considered. e.g ;fullsolve +edu"""
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
         tags = [x for x in args if x[0] == '+']
 
@@ -605,7 +624,7 @@ class Codeforces(commands.Cog):
             return message, embed
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(contest_unsolved_pairs, 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     @staticmethod
     def getEloWinProbability(ra: float, rb: float) -> float:
@@ -626,11 +645,14 @@ class Codeforces(commands.Cog):
                 right = r
         return round((left + right) / 2)
 
-    @commands.command(brief='Calculate team rating', usage='[handles] [+peak]')
-    async def teamrate(self, ctx, *args: str):
+    @commands.hybrid_command(brief='Calculate team rating', usage='[handles] [+peak]')
+    async def teamrate(self, ctx, *, args: str = ''):
         """Provides the combined rating of the entire team.
         If +server is provided as the only handle, will display the rating of the entire server.
         Supports multipliers. e.g: ;teamrate gamegame*1000"""
+        # Slash commands have no variadic parameter, so the handles and
+        # filters arrive as one field. Prefix invocations are unaffected.
+        args = args.split()
 
         (is_entire_server, peak), handles = cf_common.filter_flags(args, ['+server', '+peak'])
         handles = handles or ('!' + str(ctx.author),)
