@@ -1,12 +1,13 @@
 import datetime
 import random
-from typing import List
+from typing import List, Literal, Optional
 import math
 import time
 from collections import defaultdict
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 
@@ -18,6 +19,11 @@ from tle.util.db.user_db_conn import Gitgud
 from tle.util import paginator
 from tle.util import cache_system2
 
+
+# Mirrors cache_system2._DIV_TAGS. Divisions are kept separate from ordinary
+# tags because they are stripped before the score is computed, so asking for a
+# division costs none of the points that asking for a tag does.
+_Division = Literal['div1', 'div2', 'div3', 'div4', 'edu']
 
 _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
@@ -304,60 +310,113 @@ class Codeforces(commands.Cog):
         embed = discord_common.cf_color_embed(description=msg)
         await ctx.send(f'Mashup contest for `{str_handles}`', embed=embed)
 
-    @commands.hybrid_command(brief='Challenge', aliases=['gitbad'],
-                      usage='[rating|rating1-rating2] [+tags] [~tags] [+divX] [~divX]')
+    async def _tag_autocomplete(self, interaction, current: str):
+        """Suggest Codeforces tags, preserving any already typed.
+
+        Discord replaces the whole option value with the chosen suggestion, so
+        each choice carries the earlier tags along with it. There are more tags
+        than the 25 choice limit allows, which is why this is autocomplete
+        rather than a dropdown.
+        """
+        known = sorted({tag for problem in cf_common.cache2.problem_cache.problems
+                        for tag in problem.tags})
+        head, _, partial = current.rpartition(',')
+        head = head.strip()
+        partial = partial.strip().lower()
+        prefix = f'{head}, ' if head else ''
+        choices = []
+        for tag in known:
+            if partial and partial not in tag.lower():
+                continue
+            value = f'{prefix}{tag}'
+            if len(value) <= 100:
+                choices.append(app_commands.Choice(name=value, value=value))
+            if len(choices) == 25:
+                break
+        return choices
+
+    @staticmethod
+    def _split_tags(text):
+        """Split a comma separated tag field.
+
+        Comma rather than space because 14 of the 43 Codeforces tags contain
+        one ('binary search', 'data structures'), which the old '+tag' syntax
+        could not express at all.
+        """
+        return [tag.strip() for tag in text.split(',') if tag.strip()]
+
+    @commands.hybrid_command(brief='Request a problem to solve for gitgud points',
+                             aliases=['gitbad'])
+    @app_commands.describe(
+        rating='Problem rating, 800-3500. Defaults to your own rating.',
+        max_rating='Upper bound of a rating range. The rating and points are then hidden.',
+        tags='Only problems with these tags, comma separated. Costs 200 points.',
+        exclude_tags='Never pick problems with these tags, comma separated.',
+        division='Only problems from this division. Costs no points.',
+        exclude_division='Never pick problems from this division.',
+    )
+    @app_commands.autocomplete(tags=_tag_autocomplete, exclude_tags=_tag_autocomplete)
     @cf_common.user_guard(group='gitgud')
-    async def gitgud(self, ctx, *, args: str = ''):
-        """Gitgud: Request a problem with a specific rating with /gitgud <rating> or within a rating range with /gitgud <rating1>-<rating2>
-        - Points are assigned by difference between problem rating and your current rating (rounded to nearest 100)
-        - Filter problems by division with [+divX] [~divX] possible values are div1, div2, div3, div4, edu
-        - Filter problems by tags with [+tags] [~tags]
-        - Claim gitgud points once problem is solved with /gotgud
-        - If you can't solve the problem or used external help you should skip it with /nogud (Available after 2 hours)
-        - All-time ranklist: /gitgudders
-        - Monthly ranklist: /monthlygitgudders
-        - Another way to gather gitgud points is /upsolve (only works if there is no active gitgud-Challenge)
-        - Get more help by mentioning the bot: @TLE help <command> (e.g. help gitgudders)
-        
+    async def gitgud(self, ctx,
+                     rating: Optional[app_commands.Range[int, 800, 3500]] = None,
+                     max_rating: Optional[app_commands.Range[int, 800, 3500]] = None,
+                     tags: str = '',
+                     exclude_tags: str = '',
+                     division: Optional[_Division] = None,
+                     exclude_division: Optional[_Division] = None):
+        """Request a problem to solve for gitgud points.
+
+        Points are assigned by the difference between the problem rating and
+        your own rating, rounded to the nearest 100. Asking for tags costs 200
+        points; asking for a division costs nothing.
+
+        Giving `max_rating` asks for a range instead of a single rating, and
+        hides the problem rating and the points behind a spoiler so the range
+        does not give away the difficulty.
+
+        - Claim your points once solved with /gotgud
+        - Skip a problem you cannot solve with /nogud (available after 2 hours)
+        - Ranklists: /gitgudders and /monthlygitgudders
+        - /upsolve is another way to gather points, when no challenge is active
+
         Point distribution:
         rating diff | <-300| -300 | -200 | -100 |   0  |  100 |  200 |>=300
         no tags     |   1  |   2  |   3  |   5  |   8  |  12  |  17  |  23 
         rating diff | <-100| -100 |   0  |  100 |  200 |  300 |  400 |>=500
         tags        |   1  |   2  |   3  |   5  |   8  |  12  |  17  |  23 
         """
-        # Slash commands have no variadic parameter, so the handles and
-        # filters arrive as one field. Prefix invocations are unaffected.
-        args = args.split()
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
         user = cf_common.user_db.fetch_cf_user(handle)
         user_rating = round(user.effective_rating, -2)
         user_rating = max(800, user_rating)
-        user_rating = min(3500, user_rating)        
-        rating = user_rating
-        rating = max(1100, rating)
-        rating = min(3000, rating)
+        user_rating = min(3500, user_rating)
+        # Points are scored against the requester's own rating, never against
+        # the rating they asked for.
+        scoring_rating = min(3000, max(1100, user_rating))
+
+        if max_rating is not None and rating is None:
+            raise CodeforcesCogError('Give `rating` as the lower bound when using `max_rating`.')
+        srating = user_rating if rating is None else rating
+        erating = srating if max_rating is None else max_rating
+        if erating < srating:
+            raise CodeforcesCogError(f'`max_rating` ({erating}) is below `rating` ({srating}).')
+        # A range gives away less about the difficulty, so the rating and the
+        # points are spoilered when one is asked for.
+        hidden = max_rating is not None
+
         submissions = await cf.user.status(handle=handle)
         solved = {sub.problem.name for sub in submissions}
-        noguds = cf_common.user_db.get_noguds(ctx.message.author.id)
-        tags = cf_common.parse_tags(args, prefix='+')
-        bantags = cf_common.parse_tags(args, prefix='~')
-        srating = user_rating
-        erating = user_rating 
-        hidden = False
-        for arg in args:
-            if arg[0] == "-":
-                raise CodeforcesCogError('Wrong rating requested. Remember gitgud now uses rating (800-3500) instead of delta.')    
-            if arg[0:3].isdigit():
-                ratings = arg.split("-")
-                srating = int(ratings[0])
-                if (len(ratings) > 1): 
-                    erating = int(ratings[1])
-                    hidden = True
-                else:
-                    erating = srating
-        
-        if erating < 800 or srating > 3500:
-            raise CodeforcesCogError('Wrong rating requested. Remember gitgud now uses rating (800-3500) instead of delta.')
+        noguds = cf_common.user_db.get_noguds(ctx.author.id)
+
+        tags = self._split_tags(tags)
+        bantags = self._split_tags(exclude_tags)
+        # Divisions are appended after this, and must not count towards the
+        # tag penalty.
+        scored_as_tagged = bool(tags or bantags)
+        if division is not None:
+            tags.append(division)
+        if exclude_division is not None:
+            bantags.append(exclude_division)
 
         await self._validate_gitgud_status(ctx)
 
@@ -382,12 +441,11 @@ class Codeforces(commands.Cog):
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
 
-        # remove division tags since we dont want them to reduce points
-        tags = [tag for tag in tags if tag not in cache_system2._DIV_TAGS]
-        bantags = [tag for tag in bantags if tag not in cache_system2._DIV_TAGS]
-
-        delta = problems[choice].rating - rating
-        if tags or bantags:
+        delta = problems[choice].rating - scoring_rating
+        # Divisions never reduce the score, only real tags do. That used to be
+        # done by filtering _DIV_TAGS back out of the tag lists here; the
+        # division is a separate parameter now, so it was never mixed in.
+        if scored_as_tagged:
             delta = delta - 200
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)
 
