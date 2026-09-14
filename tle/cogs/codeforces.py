@@ -1,6 +1,6 @@
 import datetime
 import random
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, get_args
 import math
 import time
 from collections import defaultdict
@@ -20,10 +20,15 @@ from tle.util import paginator
 from tle.util import cache_system2
 
 
-# Mirrors cache_system2._DIV_TAGS. Divisions are kept separate from ordinary
-# tags because they are stripped before the score is computed, so asking for a
-# division costs none of the points that asking for a tag does.
+# Divisions are kept separate from ordinary tags because asking for a division
+# costs none of the points that asking for a tag does. TLE writes these into
+# Problem.tags itself when caching problemsets, so they have to be kept out of
+# anything that offers "real" Codeforces tags.
 _Division = Literal['div1', 'div2', 'div3', 'div4', 'edu']
+
+if set(get_args(_Division)) != set(cache_system2._DIV_TAGS):
+    raise RuntimeError('_Division has drifted from cache_system2._DIV_TAGS: '
+                       f'{get_args(_Division)} vs {cache_system2._DIV_TAGS}')
 
 _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
@@ -319,7 +324,8 @@ class Codeforces(commands.Cog):
         rather than a dropdown.
         """
         known = sorted({tag for problem in cf_common.cache2.problem_cache.problems
-                        for tag in problem.tags})
+                        for tag in problem.tags
+                        if tag not in cache_system2._DIV_TAGS})
         head, _, partial = current.rpartition(',')
         head = head.strip()
         partial = partial.strip().lower()
@@ -336,14 +342,25 @@ class Codeforces(commands.Cog):
         return choices
 
     @staticmethod
-    def _split_tags(text):
+    def _split_tags(text, field):
         """Split a comma separated tag field.
 
-        Comma rather than space because 14 of the 43 Codeforces tags contain
-        one ('binary search', 'data structures'), which the old '+tag' syntax
-        could not express at all.
+        Comma rather than space because 14 of the Codeforces tags contain one
+        ('binary search', 'data structures'), which the old '+tag' syntax could
+        not express at all.
+
+        Division tags are rejected rather than accepted quietly. They would
+        filter exactly as the division parameter does while also triggering the
+        200 point tag penalty, so taking them here would charge for something
+        the dedicated option gives away free.
         """
-        return [tag.strip() for tag in text.split(',') if tag.strip()]
+        tags = [tag.strip() for tag in text.split(',') if tag.strip()]
+        divisions = [tag for tag in tags if tag in cache_system2._DIV_TAGS]
+        if divisions:
+            raise CodeforcesCogError(
+                f'`{", ".join(divisions)}` belongs in the division option, not `{field}`. '
+                'Filtering by division there costs no points, while a tag costs 200.')
+        return tags
 
     @commands.hybrid_command(brief='Request a problem to solve for gitgud points',
                              aliases=['gitbad'])
@@ -408,8 +425,8 @@ class Codeforces(commands.Cog):
         solved = {sub.problem.name for sub in submissions}
         noguds = cf_common.user_db.get_noguds(ctx.author.id)
 
-        tags = self._split_tags(tags)
-        bantags = self._split_tags(exclude_tags)
+        tags = self._split_tags(tags, 'tags')
+        bantags = self._split_tags(exclude_tags, 'exclude_tags')
         # Divisions are appended after this, and must not count towards the
         # tag penalty.
         scored_as_tagged = bool(tags or bantags)
