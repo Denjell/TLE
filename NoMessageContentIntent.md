@@ -234,6 +234,17 @@ unquoted in practice, so the risk is low, but each of the 25 needs its parsing
 helper (`cf_common.parse_tags`, the per-cog filter parsers) re-checked to
 confirm it receives a list of the same shape.
 
+**Three have since gone further.** `gitgud`, `gimme` and `stalk` now take
+labelled options instead of one `args` field: comma separated `tags` /
+`exclude_tags` with autocomplete, `division` / `exclude_division` dropdowns,
+`Range` rating bounds, and `after` / `before` dates. `stalk` also turns its
+four submission-type flags into one autocompleted comma separated field, and
+`+hardest` / `+team` / `c+` / `i+` into `sort` / `include_team` / `contests` /
+`indices`. The shared helpers live on the `Codeforces` cog
+([codeforces.py](tle/cogs/codeforces.py)) and are the pattern to copy for the
+rest of the filter commands. This drops the prefix form of those three, which
+is acceptable here because nobody mentions the bot to invoke them.
+
 ### 6.3 Variadic typed parameters — 7 commands
 
 | Command | Signature | Cap |
