@@ -30,6 +30,20 @@ if set(get_args(_Division)) != set(cache_system2._DIV_TAGS):
     raise RuntimeError('_Division has drifted from cache_system2._DIV_TAGS: '
                        f'{get_args(_Division)} vs {cache_system2._DIV_TAGS}')
 
+# Codeforces participant types, under the names the slash options offer.
+_SUBMISSION_TYPES = {
+    'contest': 'CONTESTANT',
+    'out_of_competition': 'OUT_OF_COMPETITION',
+    'virtual': 'VIRTUAL',
+    'practice': 'PRACTICE',
+}
+
+# Date options are read as bare digits, by length. Both orders are offered:
+# day-first is what the 'd>=' prefix syntax has always taken, year-first is what
+# a labelled field invites.
+_DATE_SEPARATORS = str.maketrans('', '', '-/. ')
+_DATE_FORMATS = {4: ('%Y',), 6: ('%m%Y', '%Y%m'), 8: ('%d%m%Y', '%Y%m%d')}
+
 _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
 _GITGUD_SCORE_DISTRIB_MIN = -400
@@ -157,29 +171,157 @@ class Codeforces(commands.Cog):
             pages = [make_page(chunk, pi, len(problems)) for pi, chunk in enumerate(paginator.chunkify(problems, 10))]
             paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)   
 
-    @commands.hybrid_command(brief='Recommend a problem',
-                      usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    @cf_common.user_guard(group='gitgud')
-    async def gimme(self, ctx, *, args: str = ''):
-        # Slash commands have no variadic parameter, so the handles and
-        # filters arrive as one field. Prefix invocations are unaffected.
-        args = args.split()
-        handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
-        rating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
-        tags = cf_common.parse_tags(args, prefix='+')
-        bantags = cf_common.parse_tags(args, prefix='~')
+    @staticmethod
+    def _complete_list_field(current, known):
+        """Autocomplete a comma separated field, preserving what is already typed.
 
-        srating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
-        erating = srating 
-        dlo,dhi = cf_common.parse_daterange(args)
-        for arg in args:
-            if arg[0:3].isdigit():
-                ratings = arg.split("-")
-                srating = int(ratings[0])
-                if (len(ratings) > 1): 
-                    erating = int(ratings[1])
-                else:
-                    erating = srating
+        Discord replaces the whole option value with the chosen suggestion, so
+        every choice has to carry the earlier entries along with it.
+        """
+        head, _, partial = current.rpartition(',')
+        head = head.strip()
+        partial = partial.strip().lower()
+        prefix = f'{head}, ' if head else ''
+        choices = []
+        for entry in known:
+            if partial and partial not in entry.lower():
+                continue
+            value = f'{prefix}{entry}'
+            if len(value) <= 100:
+                choices.append(app_commands.Choice(name=value, value=value))
+            if len(choices) == 25:
+                break
+        return choices
+
+    async def _tag_autocomplete(self, interaction, current: str):
+        """Suggest Codeforces tags.
+
+        There are more tags than the 25 choice limit allows, which is why this
+        is autocomplete rather than a dropdown.
+        """
+        known = sorted({tag for problem in cf_common.cache2.problem_cache.problems
+                        for tag in problem.tags
+                        if tag not in cache_system2._DIV_TAGS})
+        return self._complete_list_field(current, known)
+
+    async def _submission_type_autocomplete(self, interaction, current: str):
+        """Suggest submission types.
+
+        These would fit in a dropdown, but a dropdown holds one value and
+        asking for, say, contest and virtual together is a fair thing to want.
+        """
+        return self._complete_list_field(current, sorted(_SUBMISSION_TYPES))
+
+    @staticmethod
+    def _split_list(text):
+        """Split a comma separated field into its entries."""
+        return [entry.strip() for entry in text.split(',') if entry.strip()]
+
+    @classmethod
+    def _split_tags(cls, text, field, *, tags_cost_points=False):
+        """Split a comma separated tag field.
+
+        Comma rather than space because 14 of the Codeforces tags contain one
+        ('binary search', 'data structures'), which the old '+tag' syntax could
+        not express at all.
+
+        Division tags are rejected rather than accepted quietly. Every command
+        offering this field offers a division parameter too, which filters the
+        same way without the gitgud tag penalty.
+        """
+        tags = cls._split_list(text)
+        divisions = [tag for tag in tags if tag in cache_system2._DIV_TAGS]
+        if divisions:
+            message = f'`{", ".join(divisions)}` belongs in the division option, not `{field}`.'
+            if tags_cost_points:
+                message += ' Filtering by division there costs no points, while a tag costs 200.'
+            raise CodeforcesCogError(message)
+        return tags
+
+    @classmethod
+    def _split_types(cls, text):
+        """Split a comma separated submission type field into API values."""
+        names = [name.lower() for name in cls._split_list(text)]
+        unknown = [name for name in names if name not in _SUBMISSION_TYPES]
+        if unknown:
+            raise CodeforcesCogError(
+                f'`{", ".join(unknown)}` is not a submission type. '
+                f'Pick from `{", ".join(sorted(_SUBMISSION_TYPES))}`.')
+        # An empty field means every type, which is what SubFilter.parse does.
+        return [_SUBMISSION_TYPES[name] for name in names] or list(_SUBMISSION_TYPES.values())
+
+    @staticmethod
+    def _parse_date_option(text, field):
+        """Parse a date option into a timestamp.
+
+        cf_common.parse_date takes a bare ddmmyyyy, mmyyyy or yyyy, which reads
+        fine behind a 'd>=' prefix but looks like a typo in a labelled field.
+        Separators are dropped, and year-first order is accepted alongside the
+        day-first order the prefix syntax uses. The two cannot collide for any
+        real date: 01032024 is not a year 0103, and 20240301 is not a day 20 of
+        a month 24.
+        """
+        digits = text.translate(_DATE_SEPARATORS)
+        for fmt in _DATE_FORMATS.get(len(digits), ()):
+            try:
+                return time.mktime(datetime.datetime.strptime(digits, fmt).timetuple())
+            except ValueError:
+                continue
+        raise CodeforcesCogError(
+            f'`{text}` is not a valid date for `{field}`. Give a year (2024), '
+            'a month (2024-03) or a day (2024-03-01).')
+
+    @commands.hybrid_command(brief='Recommend a problem')
+    @app_commands.describe(
+        rating='Problem rating, 800-3500. Defaults to your own rating.',
+        max_rating='Upper bound of a rating range. The rating is then hidden.',
+        tags='Only problems with these tags, comma separated.',
+        exclude_tags='Never recommend problems with these tags, comma separated.',
+        division='Only problems from this division.',
+        exclude_division='Never recommend problems from this division.',
+        after='Only contests from this date on, as 2024, 2024-03 or 2024-03-01.',
+        before='Only contests before this date, as 2024, 2024-03 or 2024-03-01.',
+    )
+    @app_commands.autocomplete(tags=_tag_autocomplete, exclude_tags=_tag_autocomplete)
+    @cf_common.user_guard(group='gitgud')
+    async def gimme(self, ctx,
+                    rating: Optional[app_commands.Range[int, 800, 3500]] = None,
+                    max_rating: Optional[app_commands.Range[int, 800, 3500]] = None,
+                    tags: str = '',
+                    exclude_tags: str = '',
+                    division: Optional[_Division] = None,
+                    exclude_division: Optional[_Division] = None,
+                    after: Optional[str] = None,
+                    before: Optional[str] = None):
+        """Recommend a problem you have not solved yet.
+
+        Without a rating you get one at your own rating, rounded to the nearest
+        100. Giving `max_rating` as well asks for a range instead, and hides the
+        problem rating behind a spoiler so the range does not give the
+        difficulty away.
+
+        Unlike /gitgud this earns no points and starts no challenge, so nothing
+        here costs anything.
+        """
+        handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
+        user_rating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
+
+        if max_rating is not None and rating is None:
+            raise CodeforcesCogError('Give `rating` as the lower bound when using `max_rating`.')
+        srating = user_rating if rating is None else rating
+        erating = srating if max_rating is None else max_rating
+        if erating < srating:
+            raise CodeforcesCogError(f'`max_rating` ({erating}) is below `rating` ({srating}).')
+
+        tags = self._split_tags(tags, 'tags')
+        bantags = self._split_tags(exclude_tags, 'exclude_tags')
+        if division is not None:
+            tags.append(division)
+        if exclude_division is not None:
+            bantags.append(exclude_division)
+
+        dlo = 0 if after is None else self._parse_date_option(after, 'after')
+        dhi = 10**10 if before is None else self._parse_date_option(before, 'before')
 
         submissions = await cf.user.status(handle=handle)
         solved = {sub.problem.name for sub in submissions if sub.verdict == 'OK'}
@@ -210,19 +352,73 @@ class Codeforces(commands.Cog):
             embed.add_field(name='Matched tags', value=tagslist)
         await ctx.send(f'Recommended problem for `{handle}`', embed=embed)
 
-    @commands.hybrid_command(brief='List solved problems',
-                      usage='[handles] [+hardest] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def stalk(self, ctx, *, args: str = ''):
-        """Print problems solved by user sorted by time (default) or rating.
-        All submission types are included by default (practice, contest, etc.)
+    @commands.hybrid_command(brief='List solved problems')
+    @app_commands.describe(
+        handles='Codeforces handles or Discord mentions, space separated. Defaults to you.',
+        sort='Most recently solved first (default), or hardest first.',
+        tags='Only problems with these tags, comma separated.',
+        exclude_tags='Skip problems with these tags, comma separated.',
+        division='Only problems from this division.',
+        exclude_division='Skip problems from this division.',
+        min_rating='Only problems rated at least this.',
+        max_rating='Only problems rated at most this.',
+        after='Only submissions from this date on, as 2024, 2024-03 or 2024-03-01.',
+        before='Only submissions before this date, as 2024, 2024-03 or 2024-03-01.',
+        types='Submission types, comma separated. All of them by default.',
+        contests='Only these contests, comma separated, matched against the contest name.',
+        indices='Only these problem indices, comma separated, such as A or C1.',
+        include_team='Include problems solved as part of a team.',
+    )
+    @app_commands.autocomplete(tags=_tag_autocomplete, exclude_tags=_tag_autocomplete,
+                               types=_submission_type_autocomplete)
+    async def stalk(self, ctx, handles: str = '',
+                    sort: Literal['recent', 'hardest'] = 'recent',
+                    tags: str = '',
+                    exclude_tags: str = '',
+                    division: Optional[_Division] = None,
+                    exclude_division: Optional[_Division] = None,
+                    min_rating: Optional[app_commands.Range[int, 500, 3800]] = None,
+                    max_rating: Optional[app_commands.Range[int, 500, 3800]] = None,
+                    after: Optional[str] = None,
+                    before: Optional[str] = None,
+                    types: str = '',
+                    contests: str = '',
+                    indices: str = '',
+                    include_team: bool = False):
+        """Print problems solved by a user, most recent first.
+
+        Every submission type is included unless `types` says otherwise, so
+        practice counts the same as a contest. A problem solved more than once
+        is listed once, at its first accepted submission.
         """
-        # Slash commands have no variadic parameter, so the handles and
-        # filters arrive as one field. Prefix invocations are unaffected.
-        args = args.split()
-        (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
+        hardest = sort == 'hardest'
+
+        # Built by hand rather than through SubFilter.parse, which exists to
+        # read the old '+tag r>=1500' string syntax back out of a message.
         filt = cf_common.SubFilter(False)
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+        filt.tags = self._split_tags(tags, 'tags')
+        filt.bantags = self._split_tags(exclude_tags, 'exclude_tags')
+        if division is not None:
+            filt.tags.append(division)
+        if exclude_division is not None:
+            filt.bantags.append(exclude_division)
+        if min_rating is not None:
+            filt.rlo = min_rating
+        if max_rating is not None:
+            filt.rhi = max_rating
+        # An unrated problem can satisfy no rating bound, so asking for one
+        # turns the rated flag on, as SubFilter.parse does.
+        filt.rated = min_rating is not None or max_rating is not None
+        if after is not None:
+            filt.dlo = self._parse_date_option(after, 'after')
+        if before is not None:
+            filt.dhi = self._parse_date_option(before, 'before')
+        filt.types = self._split_types(types)
+        filt.contests = self._split_list(contests)
+        filt.indices = self._split_list(indices)
+        filt.team = include_team
+
+        handles = handles.split() or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         submissions = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for subs in submissions for sub in subs]
@@ -245,7 +441,6 @@ class Codeforces(commands.Cog):
             return '\N{EN SPACE}'.join(data)
 
         def make_page(chunk):
-            
             title = '{} solved problems by {}'.format('Hardest' if hardest else 'Recently',
                                                         ', '.join(handlesWithUrl))
             hist_str = '\n'.join(make_line(sub) for sub in chunk)
@@ -315,53 +510,6 @@ class Codeforces(commands.Cog):
         embed = discord_common.cf_color_embed(description=msg)
         await ctx.send(f'Mashup contest for `{str_handles}`', embed=embed)
 
-    async def _tag_autocomplete(self, interaction, current: str):
-        """Suggest Codeforces tags, preserving any already typed.
-
-        Discord replaces the whole option value with the chosen suggestion, so
-        each choice carries the earlier tags along with it. There are more tags
-        than the 25 choice limit allows, which is why this is autocomplete
-        rather than a dropdown.
-        """
-        known = sorted({tag for problem in cf_common.cache2.problem_cache.problems
-                        for tag in problem.tags
-                        if tag not in cache_system2._DIV_TAGS})
-        head, _, partial = current.rpartition(',')
-        head = head.strip()
-        partial = partial.strip().lower()
-        prefix = f'{head}, ' if head else ''
-        choices = []
-        for tag in known:
-            if partial and partial not in tag.lower():
-                continue
-            value = f'{prefix}{tag}'
-            if len(value) <= 100:
-                choices.append(app_commands.Choice(name=value, value=value))
-            if len(choices) == 25:
-                break
-        return choices
-
-    @staticmethod
-    def _split_tags(text, field):
-        """Split a comma separated tag field.
-
-        Comma rather than space because 14 of the Codeforces tags contain one
-        ('binary search', 'data structures'), which the old '+tag' syntax could
-        not express at all.
-
-        Division tags are rejected rather than accepted quietly. They would
-        filter exactly as the division parameter does while also triggering the
-        200 point tag penalty, so taking them here would charge for something
-        the dedicated option gives away free.
-        """
-        tags = [tag.strip() for tag in text.split(',') if tag.strip()]
-        divisions = [tag for tag in tags if tag in cache_system2._DIV_TAGS]
-        if divisions:
-            raise CodeforcesCogError(
-                f'`{", ".join(divisions)}` belongs in the division option, not `{field}`. '
-                'Filtering by division there costs no points, while a tag costs 200.')
-        return tags
-
     @commands.hybrid_command(brief='Request a problem to solve for gitgud points',
                              aliases=['gitbad'])
     @app_commands.describe(
@@ -425,8 +573,8 @@ class Codeforces(commands.Cog):
         solved = {sub.problem.name for sub in submissions}
         noguds = cf_common.user_db.get_noguds(ctx.author.id)
 
-        tags = self._split_tags(tags, 'tags')
-        bantags = self._split_tags(exclude_tags, 'exclude_tags')
+        tags = self._split_tags(tags, 'tags', tags_cost_points=True)
+        bantags = self._split_tags(exclude_tags, 'exclude_tags', tags_cost_points=True)
         # Divisions are appended after this, and must not count towards the
         # tag penalty.
         scored_as_tagged = bool(tags or bantags)
