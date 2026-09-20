@@ -657,15 +657,18 @@ class Codeforces(commands.Cog):
         pages = [make_page(chunk) for chunk in paginator.chunkify(contests, 5)]
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.hybrid_command(brief="Display unsolved rounds closest to completion", usage='[keywords]')
-    async def fullsolve(self, ctx, *, args: str = ''):
-        """Displays a list of contests, sorted by number of unsolved problems.
-        Contest names matching any of the provided tags will be considered. e.g /fullsolve +edu"""
-        # Slash commands have no variadic parameter, so the handles and
-        # filters arrive as one field. Prefix invocations are unaffected.
-        args = args.split()
+    @commands.hybrid_command(brief="Display unsolved rounds closest to completion")
+    @app_commands.describe(
+        patterns='Contest name patterns, comma separated. Every contest by default.')
+    @app_commands.autocomplete(patterns=_contest_pattern_autocomplete)
+    async def fullsolve(self, ctx, patterns: str = ''):
+        """List the contests you have partly solved, closest to completion first.
+
+        A pattern matches anywhere in the contest name, ignoring case and
+        punctuation, exactly as /vc does.
+        """
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
-        tags = [x for x in args if x[0] == '+']
+        tags = [pattern.lstrip('+') for pattern in filters.split_list(patterns)]
 
         problem_to_contests = cf_common.cache2.problemset_cache.problem_to_contests
         contests = [contest for contest in cf_common.cache2.contest_cache.get_contests_in_phase('FINISHED')

@@ -4,7 +4,7 @@ import contextlib
 import logging
 import math
 import html
-from typing import Literal
+from typing import Literal, Optional
 import cairo
 import gi
 import datetime
@@ -14,6 +14,7 @@ from gi.repository import Pango, PangoCairo
 
 import discord
 import random
+from discord import app_commands
 from discord.ext import commands
 
 from tle import constants
@@ -21,6 +22,7 @@ from tle.util import cache_system2
 from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import filters
 from tle.util import events
 from tle.util import paginator
 from tle.util import table
@@ -40,6 +42,11 @@ _PRETTY_HANDLES_PER_PAGE = 10
 _TOP_DELTAS_COUNT = 10
 _MAX_RATING_CHANGES_PER_EMBED = 15
 _UPDATE_HANDLE_STATUS_INTERVAL = 6 * 60 * 60  # 6 hours
+
+# The rating bands the gitgud ranklists can be narrowed to, named as the
+# option spells them. These are bands of current rating, not the division
+# tags a problem carries.
+_GitgudDivision = Literal['div1', 'div2', 'div3']
 
 _DIVISION_RATING_LOW  = (2100, 1600, -1000)
 _DIVISION_RATING_HIGH = (9999, 2099,  1599)
@@ -255,18 +262,6 @@ def _make_pages(users, title):
         done += len(chunk)
     return pages
 
-
-def parse_date(arg):
-    try:
-        if len(arg) == 6:
-            fmt = '%m%Y'
-        # elif len(arg) == 4:
-            # fmt = '%Y'
-        else:
-            raise ValueError
-        return datetime.datetime.strptime(arg, fmt)
-    except ValueError:
-        raise HandleCogError(f'{arg} is an invalid date argument')
 
 class Handles(commands.Cog):
     def __init__(self, bot):
@@ -517,31 +512,25 @@ class Handles(commands.Cog):
         return discord_common.embed_success('\n'.join(lines))
 
     @commands.hybrid_command(name="gitgudders", brief="Show the all-time gitgud ranklist",
-                             aliases=["gudgitters", "gitbadders", "gg"],
-                             usage="[div1|div2|div3] [+all]")
-    async def gitgudders(self, ctx, *, args: str = ''):
-        """Show the list of users of gitgud with their scores."""
+                             aliases=["gudgitters", "gitbadders", "gg"])
+    @app_commands.describe(
+        division='Only rank people whose current rating is in this division.',
+        show_all='Include people who have left the server.')
+    async def gitgudders(self, ctx,
+                         division: Optional[_GitgudDivision] = None,
+                         show_all: bool = False):
+        """Show the all-time gitgud ranklist."""
         res = cf_common.user_db.get_gudgitters()
         res.sort(key=lambda r: r[1], reverse=True)
-        
-        division = None
-        showall = False
-        for arg in args:
-            if arg[0:3] == 'div':
-                try:
-                    division = int(arg[3])
-                    if division < 1 or division > 3: 
-                        raise HandleCogError('Division number must be within range [1-3]')
-                except ValueError:
-                    raise HandleCogError(f'{arg} is an invalid div argument')
-            if arg == "+all":
-                showall = True
+
+        # 'div1' is the top band; the rating tables are indexed from zero.
+        band = None if division is None else int(division[3]) - 1
 
         rankings = []
         index = 0
         for user_id, score in res:
             member = ctx.guild.get_member(int(user_id))
-            if not showall and member is None:
+            if not show_all and member is None:
                 continue
             if score > 0:
                 handle = cf_common.user_db.get_handle(user_id, ctx.guild.id)
@@ -555,9 +544,9 @@ class Handles(commands.Cog):
                     discord_handle = member.display_name
                 
                 
-                if division is not None:
+                if band is not None:
                     if rating is None: continue;
-                    if rating < _DIVISION_RATING_LOW[division-1] or rating > _DIVISION_RATING_HIGH[division-1]:
+                    if rating < _DIVISION_RATING_LOW[band] or rating > _DIVISION_RATING_HIGH[band]:
                         continue
                 
                 rankings.append((index, discord_handle, handle, rating, score))
@@ -576,16 +565,19 @@ class Handles(commands.Cog):
         return rating_changes
 
     @commands.hybrid_command(name="monthlygitgudders", brief="Show the monthly gitgud ranklist",
-                             aliases=["monthlygudgitters", "monthlygg", "monthlygitbadders", "mgg"],
-                             usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def monthlygitgudders(self, ctx, *, args: str = ''):
-        """Show the list of users of gitgud with their scores."""
-        
-        # Calculate time range of given month (d=) or current month
+                             aliases=["monthlygudgitters", "monthlygg", "monthlygitbadders", "mgg"])
+    @app_commands.describe(
+        month='Month to rank, as 2024-03. The current month by default.',
+        division='Only rank people whose rating was in this division that month.',
+        show_all='Include people who have left the server.')
+    async def monthlygitgudders(self, ctx,
+                                month: Optional[str] = None,
+                                division: Optional[_GitgudDivision] = None,
+                                show_all: bool = False):
+        """Show the gitgud ranklist for one month."""
         now = datetime.datetime.now()
-        for arg in args:
-            if arg[0:2] == 'd=':
-                now = parse_date(arg[2:])
+        if month is not None:
+            now = datetime.datetime.fromtimestamp(filters.parse_date(month, 'month'))
 
         start_time, end_time = cf_common.get_start_and_end_of_month(now)
         
@@ -595,19 +587,9 @@ class Handles(commands.Cog):
         if start_time >= cfc._GITGUD_MORE_POINTS_START_TIME: 
             morePointsActive = True
 
-        division = None
-        showall = False
-        for arg in args:
-            if arg[0:3] == 'div':
-                try:
-                    division = int(arg[3])
-                    if division < 1 or division > 3: 
-                        raise HandleCogError('Division number must be within range [1-3]')
-                except ValueError:
-                    raise HandleCogError(f'{arg} is an invalid div argument')
-            if arg == "+all":
-                showall = True                    
-       
+        # 'div1' is the top band; the rating tables are indexed from zero.
+        band = None if division is None else int(division[3]) - 1
+
         # get gitgud of month and calculate scores
         results = cf_common.user_db.get_gudgitters_timerange(start_time, end_time)
         res = {}
@@ -626,7 +608,7 @@ class Handles(commands.Cog):
         cache = cf_common.cache2.rating_changes_cache
         for user_id, score in sorted(res.items(), key=lambda item: item[1], reverse=True):
             member = ctx.guild.get_member(int(user_id))
-            if not showall and member is None:
+            if not show_all and member is None:
                 continue
             if score > 0:
                 handle = cf_common.user_db.get_handle(user_id, ctx.guild.id)
@@ -647,8 +629,8 @@ class Handles(commands.Cog):
                 if len(rating_changes) < 1: 
                     continue
                 if rating_changes[-1] is None: continue
-                if division is not None:
-                    if rating_changes[-1].newRating < _DIVISION_RATING_LOW[division-1] or rating_changes[-1].newRating > _DIVISION_RATING_HIGH[division-1]:
+                if band is not None:
+                    if rating_changes[-1].newRating < _DIVISION_RATING_LOW[band] or rating_changes[-1].newRating > _DIVISION_RATING_HIGH[band]:
                         continue
                 rating = rating_changes[-1].newRating
                 rankings.append((index, discord_handle, handle, rating, score))

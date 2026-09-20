@@ -1,6 +1,9 @@
 import random
 from enum import IntEnum
+from typing import Literal
+
 import discord
+from discord import app_commands
 from discord.ext import commands
 import datetime
 
@@ -28,7 +31,6 @@ FONTS = [
     'Noto Sans CJK KR',
 ]
 
-
 _TRAINING_MIN_RATING_VALUE = 800
 _TRAINING_MAX_RATING_VALUE = 3500
 
@@ -40,6 +42,16 @@ class TrainingMode(IntEnum):
     TIMED30 = 3
     TIMED60 = 4
     TIMED1 = 5
+
+
+# The game modes, under the names the mode option offers.
+_TRAINING_MODES = {
+    'infinite': TrainingMode.NORMAL,
+    'survival': TrainingMode.SURVIVAL,
+    'timed15': TrainingMode.TIMED15,
+    'timed30': TrainingMode.TIMED30,
+    'timed60': TrainingMode.TIMED60,
+}
 
 
 class TrainingResult(IntEnum):
@@ -298,30 +310,6 @@ class Training(commands.Cog):
         latest = cf_common.user_db.get_latest_training(user_id)
         return latest
 
-    def _extractArgs(self, args):
-        mode = TrainingMode.NORMAL
-        rating = 800
-        unrecognizedArgs = []
-        for arg in args:
-            if arg.isdigit():
-                rating = int(arg)
-            elif arg == "infinite" or arg == "+infinite":
-                mode = TrainingMode.NORMAL
-            elif arg == "survival" or arg == "+survival":
-                mode = TrainingMode.SURVIVAL
-            elif arg == "timed15" or arg == "+timed15":
-                mode = TrainingMode.TIMED15
-            elif arg == "timed30" or arg == "+timed30":
-                mode = TrainingMode.TIMED30
-            elif arg == "timed60" or arg == "+timed60":
-                mode = TrainingMode.TIMED60
-            else:
-                unrecognizedArgs.append(arg)
-        if len(unrecognizedArgs) > 0:
-            raise TrainingCogError(
-                'Unrecognized arguments: {}'.format(' '.join(unrecognizedArgs)))
-        return rating, mode
-
     def _getStatus(self, success):
         if success == TrainingResult.SOLVED:
             return TrainingProblemStatus.SOLVED
@@ -536,17 +524,23 @@ class Training(commands.Cog):
 
     # User commands start here
 
-    @training.command(brief='Start a training session',
-                      usage='[rating] [infinite|survival|timed15|timed30|timed60]')
+    @training.command(brief='Start a training session')
+    @app_commands.describe(
+        rating='Rating to start at, a multiple of 100 from 800 to 3500.',
+        mode='How the session ends. Infinite by default.')
     @cf_common.user_guard(group='training')
-    async def start(self, ctx, *, args: str = ''):
-        """ Start your training session
-            - Game modes:
-              - infinite: Play the game in infinite mode (you can skip at any time) [DEFAULT]
-              - survival: Challenge mode with only 3 skips available
-              - timed15/timed30/timed60: Challenge mode similar to survival but u only have a limited time to solve your problem. 
-                                         Slow solves will also reduce your life by 1. Fast solves will increase available time for the next problem.
-            - It is possible to change the start rating from 800 to any other valid rating
+    async def start(self, ctx,
+                    rating: app_commands.Range[int, _TRAINING_MIN_RATING_VALUE,
+                                               _TRAINING_MAX_RATING_VALUE] = 800,
+                    mode: Literal['infinite', 'survival', 'timed15',
+                                  'timed30', 'timed60'] = 'infinite'):
+        """Start a training session.
+
+        Game modes:
+          - infinite: skip whenever you like, the session never ends
+          - survival: three skips, then it is over
+          - timed15 / timed30 / timed60: survival with a clock as well. A slow
+            solve costs a life, a fast one buys time for the next problem.
         """
         # check if we are in the correct channel
         self._checkIfCorrectChannel(ctx)
@@ -556,12 +550,7 @@ class Training(commands.Cog):
         # get user submissions
         submissions = await cf.user.status(handle=handle)
 
-        # Slash commands have no variadic parameter. Splitting here keeps
-        # _extractArgs order independent, so '1500 survival' and 'survival
-        # 1500' both still work on either path.
-        rating, mode = self._extractArgs(args.split())
-
-        gamestate = Game(mode)
+        gamestate = Game(_TRAINING_MODES[mode])
 
         # check if start of a new training is possible
         active = await self._getActiveTraining(ctx.author.id)
