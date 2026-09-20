@@ -38,6 +38,13 @@ _SUBMISSION_TYPES = {
     'practice': 'PRACTICE',
 }
 
+# Contest name patterns worth offering for /vc. vc matches any substring of a
+# contest name, so this is a shortlist rather than a closed set; each of these
+# matches contests in the cache today.
+_VC_PATTERNS = ('div1', 'div2', 'div3', 'div4', 'educational', 'global',
+                'icpc', 'technocup', 'kotlin', 'hello', 'goodbye',
+                'april fools', 'vk cup', 'bubble cup', 'codeton')
+
 # Date options are read as bare digits, by length. Both orders are offered:
 # day-first is what the 'd>=' prefix syntax has always taken, year-first is what
 # a labelled field invites.
@@ -211,6 +218,16 @@ class Codeforces(commands.Cog):
         asking for, say, contest and virtual together is a fair thing to want.
         """
         return self._complete_list_field(current, sorted(_SUBMISSION_TYPES))
+
+    async def _contest_pattern_autocomplete(self, interaction, current: str):
+        """Suggest contest name patterns for /vc.
+
+        Not a closed set: vc matches any substring of a contest name, so a
+        pattern typed by hand works just as well. Deriving the list from the
+        contest cache was tried and buries the real series names under words
+        like 'rules', 'teams' and 'day'.
+        """
+        return self._complete_list_field(current, _VC_PATTERNS)
 
     @staticmethod
     def _split_list(text):
@@ -746,15 +763,27 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send(f'Failed to force challenge skip.')
 
-    @commands.hybrid_command(brief='Recommend a contest', usage='[handles...] [+pattern...]')
-    async def vc(self, ctx, *, args: str = ''):
-        """Recommends a contest based on Codeforces rating of the handle provided.
-        e.g /vc mblazev c1729 +global +hello +goodbye +avito"""
-        # Slash commands have no variadic parameter, so the handles and
-        # filters arrive as one field. Prefix invocations are unaffected.
-        args = args.split()
-        markers = [x for x in args if x[0] == '+']
-        handles = [x for x in args if x[0] != '+'] or ('!' + str(ctx.author),)
+    @commands.hybrid_command(brief='Recommend a contest')
+    @app_commands.describe(
+        handles='Codeforces handles or Discord mentions, space separated. Defaults to you.',
+        patterns='Contest name patterns, comma separated. Picked from your rating if empty.',
+    )
+    @app_commands.autocomplete(patterns=_contest_pattern_autocomplete)
+    async def vc(self, ctx, handles: str = '', patterns: str = ''):
+        """Recommend a contest nobody in the list has submitted to.
+
+        A pattern matches anywhere in the contest name, ignoring case and
+        punctuation, so `div2` finds "(Div. 2)" and `goodbye` finds
+        "Good Bye 2023". The suggestions are the usual ones; anything you type
+        by hand counts too.
+
+        With no pattern the division follows the average rating: div3 below
+        1600, div2 below 2100, and the div1 grade series above that.
+        """
+        # A leading '+' was how the old single-field syntax told a pattern from
+        # a handle. It carries no meaning now, but is cheap to forgive.
+        markers = [pattern.lstrip('+') for pattern in self._split_list(patterns)]
+        handles = handles.split() or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=25)
         info = await cf.user.info(handles=handles)
         contests = cf_common.cache2.contest_cache.get_contests_in_phase('FINISHED')
