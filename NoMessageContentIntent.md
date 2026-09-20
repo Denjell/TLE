@@ -254,9 +254,18 @@ acceptable here because nobody mentions the bot to invoke them.
 `plot visualrank`, `teamrate` and `ranklist` followed, with booleans in place
 of their `+flag` words and a real option in place of the `+server` handle.
 
-**Still on one `args` field:** `gitgudders`, `monthlygitgudders`,
-`training start`, `fullsolve`. Of these only `fullsolve` genuinely wants a
-single free-text field.
+`gitgudders`, `monthlygitgudders`, `training start` and `fullsolve` finished
+the set. **No command takes an `args` field any more.** `fullsolve` looked
+like the one that genuinely wanted free text, but its `+keyword` words were
+contest name markers matched by `cf.Contest.matches`, so it takes the same
+autocompleted `patterns` field as `vc`.
+
+**A regression this surfaced.** Both gitgud ranklists loop `for arg in args`
+over what `*args` used to make a tuple of words. §6.2's conversion made `args`
+a plain string, so the loop iterated *characters*, and no single character
+equals `+all` or starts with `div` — the division filter and `+all` did
+nothing from that commit until this one. Worth remembering when converting
+anything else that reads `args` in a loop rather than through a parser.
 
 **Not a bug in `ranklist`.** `+official` was reported here earlier as being
 dropped by the ranklist call sites. It is not: `generate_ranklist` passes it
