@@ -233,17 +233,22 @@ class Graphs(commands.Cog):
         for name with spaces use "!name with spaces" (with quotes)."""
         await ctx.send_help('plot')
 
-    @plot.command(brief='Plot Codeforces rating graph', usage='[+zoom] [+number] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def rating(self, ctx, *, args: str = ''):
+    @plot.command(brief='Plot Codeforces rating graph')
+    @filters.describe('handles',
+                      zoom='Fit the vertical axis to the data instead of a fixed range.',
+                      number='Plot against contest number instead of date.',
+                      peak='Show only the contests that raised your peak rating.',
+                      after='Only contests rated on this date or later, as 2024 or 2024-03-01.',
+                      before='Only contests rated before this date, as 2024 or 2024-03-01.')
+    async def rating(self, ctx, handles: str = '',
+                     zoom: bool = False,
+                     number: bool = False,
+                     peak: bool = False,
+                     after: Optional[str] = None,
+                     before: Optional[str] = None):
         """Plots Codeforces rating graph for the handles provided."""
-        # Slash commands have no variadic parameter, so the filters arrive
-        # as one field. Prefix invocations are unaffected.
-        args = args.split()
-
-        (zoom, number, peak), args = cf_common.filter_flags(args, ['+zoom' , '+number', '+peak'])
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+        filt = filters.build_sub_filter(after=after, before=before)
+        handles = handles.split() or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.rating(handle=handle) for handle in handles]
         resp = [filt.filter_rating_changes(rating_changes) for rating_changes in resp]
@@ -297,17 +302,20 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
 
-    @plot.command(brief='Plot Codeforces performance graph', aliases=['perf'], usage='[+zoom] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def performance(self, ctx, *, args: str = ''):
+    @plot.command(brief='Plot Codeforces performance graph', aliases=['perf'])
+    @filters.describe('handles',
+                      zoom='Fit the vertical axis to the data instead of a fixed range.',
+                      peak='Show only the contests that raised your peak performance.',
+                      after='Only contests rated on this date or later, as 2024 or 2024-03-01.',
+                      before='Only contests rated before this date, as 2024 or 2024-03-01.')
+    async def performance(self, ctx, handles: str = '',
+                          zoom: bool = False,
+                          peak: bool = False,
+                          after: Optional[str] = None,
+                          before: Optional[str] = None):
         """Plots Codeforces performance graph for the handles provided."""
-        # Slash commands have no variadic parameter, so the filters arrive
-        # as one field. Prefix invocations are unaffected.
-        args = args.split()
-
-        (zoom, peak), args = cf_common.filter_flags(args, ['+zoom' , '+peak'])
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+        filt = filters.build_sub_filter(after=after, before=before)
+        handles = handles.split() or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.rating(handle=handle) for handle in handles]
         # extract last rating before corrections
@@ -359,25 +367,30 @@ class Graphs(commands.Cog):
 
 
 
-    @plot.command(brief='Plot Codeforces extremes graph',
-                  usage='[handles] [+solved] [+unsolved] [+nolegend] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def extreme(self, ctx, *, args: str = ''):
+    @plot.command(brief='Plot Codeforces extremes graph')
+    @filters.describe('handle',
+                      solved='Plot the highest rated problem solved in each contest.',
+                      unsolved='Plot the lowest rated problem left unsolved in each contest.',
+                      legend='Show the legend.',
+                      after='Only contests rated on this date or later, as 2024 or 2024-03-01.',
+                      before='Only contests rated before this date, as 2024 or 2024-03-01.')
+    async def extreme(self, ctx, handle: str = '',
+                      solved: bool = True,
+                      unsolved: bool = True,
+                      legend: bool = True,
+                      after: Optional[str] = None,
+                      before: Optional[str] = None):
         """Plots pairs of lowest rated unsolved problem and highest rated solved problem for every
         contest that was rated for the given user.
         """
-        # Slash commands have no variadic parameter, so the filters arrive
-        # as one field. Prefix invocations are unaffected.
-        args = args.split()
-        (solved, unsolved, nolegend), args = cf_common.filter_flags(args, ['+solved', '+unsolved', '+nolegend'])
-        legend, = cf_common.negate_flags(nolegend)
         if not solved and not unsolved:
-            solved = unsolved = True
-        
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
+            raise GraphCogError('Turning off both `solved` and `unsolved` leaves nothing to plot.')
+        filt = filters.build_sub_filter(after=after, before=before)
 
-        handles = args or ('!' + str(ctx.author),)
-        handle, = await cf_common.resolve_handles(ctx, self.converter, handles)
+        names = handle.split() or ['!' + str(ctx.author)]
+        if len(names) > 1:
+            raise GraphCogError('Only one handle allowed.')
+        handle, = await cf_common.resolve_handles(ctx, self.converter, names)
         ratingchanges = await cf.user.rating(handle=handle)
         if not ratingchanges:
             raise GraphCogError(f'User {handle} is not rated')
@@ -653,8 +666,10 @@ class Graphs(commands.Cog):
             exclude_division=exclude_division, min_rating=min_rating,
             max_rating=max_rating, after=after, before=before, types=types,
             contests=contests, indices=indices, include_team=include_team)
-        handle = handle.strip() or '!' + str(ctx.author)
-        handle, = await cf_common.resolve_handles(ctx, self.converter, (handle,))
+        names = handle.split() or ['!' + str(ctx.author)]
+        if len(names) > 1:
+            raise GraphCogError('Only one handle allowed.')
+        handle, = await cf_common.resolve_handles(ctx, self.converter, names)
         rating_resp = [await cf.user.rating(handle=handle)]
         rating_resp = [filt.filter_rating_changes(rating_changes) for rating_changes in rating_resp]
         submissions = filt.filter_subs(await cf.user.status(handle=handle))
@@ -791,13 +806,20 @@ class Graphs(commands.Cog):
                                 binsize=100,
                                 title=title)
 
-    @plot.command(brief='Show percentile distribution on codeforces', usage='[+zoom] [+nomarker] [handles...] [+exact]')
-    async def centile(self, ctx, *, args: str = ''):
-        """Show percentile distribution of codeforces and mark given handles in the plot. If +zoom and handles are given, it zooms to the neighborhood of the handles."""
-        # Slash commands have no variadic parameter, so the filters arrive
-        # as one field. Prefix invocations are unaffected.
-        args = args.split()
-        (zoom, nomarker, exact), args = cf_common.filter_flags(args, ['+zoom', '+nomarker', '+exact'])
+    @plot.command(brief='Show percentile distribution on codeforces')
+    @filters.describe('handles',
+                      zoom='Zoom to the neighbourhood of the marked handles.',
+                      mark_handles='Mark the handles on the plot.',
+                      exact='Print the exact percentile beside each marked handle.')
+    async def centile(self, ctx, handles: str = '',
+                      zoom: bool = False,
+                      mark_handles: bool = True,
+                      exact: bool = False):
+        """Show the Codeforces percentile distribution, with the given handles marked.
+
+        With `zoom` and at least one handle, the plot zooms to the
+        neighbourhood of those handles.
+        """
         # Prepare data
         intervals = [(rank.low, rank.high) for rank in cf.RATED_RANKS]
         colors = [rank.color_graph for rank in cf.RATED_RANKS]
@@ -808,8 +830,8 @@ class Graphs(commands.Cog):
         perc = 100*np.arange(n)/n
 
         users_to_mark = {}
-        if not nomarker:
-            handles = args or ('!' + str(ctx.author),)
+        if mark_handles:
+            handles = handles.split() or ('!' + str(ctx.author),)
             handles = await cf_common.resolve_handles(ctx,
                                                       self.converter,
                                                       handles,
@@ -1010,21 +1032,20 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Show rating changes by rank', usage='contest_id [+server] [+zoom] [handles..]')
-    async def visualrank(self, ctx, contest_id: int, *, args: str = ''):
-        """Plot rating changes by rank. Add handles to specify a handle in the plot.
-        if arguments contains `+server`, it will include just server members and not all codeforces users.
-        Specify `+zoom` to zoom to the neighborhood of handles."""
-        # Slash commands have no variadic parameter, so the filters arrive
-        # as one field. Prefix invocations are unaffected.
-        args = args.split()
-
-        args = set(args)
-        (in_server, zoom), handles = cf_common.filter_flags(args, ['+server', '+zoom'])
-        handles = await cf_common.resolve_handles(ctx, self.converter, handles, mincnt=0, maxcnt=20)
+    @plot.command(brief='Show rating changes by rank')
+    @filters.describe('handles',
+                      contest_id='Contest id, as shown by /contests.',
+                      server_only='Plot only server members instead of all of Codeforces.',
+                      zoom='Zoom to the neighbourhood of the given handles.')
+    async def visualrank(self, ctx, contest_id: int, handles: str = '',
+                         server_only: bool = False,
+                         zoom: bool = False):
+        """Plot rating changes by rank, marking the handles given."""
+        handles = await cf_common.resolve_handles(ctx, self.converter, handles.split(),
+                                                  mincnt=0, maxcnt=20)
 
         rating_changes = await cf.contest.ratingChanges(contest_id=contest_id)
-        if in_server:
+        if server_only:
             guild_handles = set(handle for discord_id, handle
                                 in cf_common.user_db.get_handles_for_guild(ctx.guild.id))
             rating_changes = [rating_change for rating_change in rating_changes

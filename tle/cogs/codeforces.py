@@ -2,7 +2,6 @@ import datetime
 import random
 from typing import List, Literal, Optional
 import math
-import time
 from collections import defaultdict
 import logging
 
@@ -732,22 +731,24 @@ class Codeforces(commands.Cog):
                 right = r
         return round((left + right) / 2)
 
-    @commands.hybrid_command(brief='Calculate team rating', usage='[handles] [+peak]')
-    async def teamrate(self, ctx, *, args: str = ''):
-        """Provides the combined rating of the entire team.
-        If +server is provided as the only handle, will display the rating of the entire server.
-        Supports multipliers. e.g: /teamrate gamegame*1000"""
-        # Slash commands have no variadic parameter, so the handles and
-        # filters arrive as one field. Prefix invocations are unaffected.
-        args = args.split()
+    @commands.hybrid_command(brief='Calculate team rating')
+    @filters.describe('handles',
+                      entire_server='Rate the whole server instead of the handles given.',
+                      peak='Use each handle\'s peak rating instead of its current one.')
+    async def teamrate(self, ctx, handles: str = '',
+                       entire_server: bool = False,
+                       peak: bool = False):
+        """Give the combined rating of a team.
 
-        (is_entire_server, peak), handles = cf_common.filter_flags(args, ['+server', '+peak'])
-        handles = handles or ('!' + str(ctx.author),)
+        A handle may carry a multiplier, as in `gamegame*1000`, to count that
+        person more than once.
+        """
+        handles = handles.split() or ('!' + str(ctx.author),)
 
         def rating(user):
             return user.maxRating if peak else user.rating
 
-        if is_entire_server:
+        if entire_server:
             res = cf_common.user_db.get_cf_users_for_guild(ctx.guild.id)
             ratings = [(rating(user), 1) for user_id, user in res if user.rating is not None]
             user_str = '+server'

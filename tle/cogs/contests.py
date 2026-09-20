@@ -16,6 +16,7 @@ from tle.util import cache_system2
 from tle.util import codeforces_api as cf
 from tle.util import db
 from tle.util import discord_common
+from tle.util import filters
 from tle.util import events
 from tle.util import paginator
 from tle.util import ranklist as rl
@@ -482,25 +483,37 @@ class Contests(commands.Cog):
         return rated_contestants, ranklist
 
     @commands.hybrid_command(brief='Show ranklist for given handles and/or server members')
-    async def ranklist(self, ctx, contest_id: int, *, args: str = ''):
+    @filters.describe('handles',
+                      contest_id='Contest id, as shown by /contests.',
+                      include_server='Add every server member to the handles given.',
+                      official='Show only officially rated participants.')
+    async def ranklist(self, ctx, contest_id: int, handles: str = '',
+                       include_server: bool = False,
+                       official: bool = False):
+        """Show the ranklist of a contest.
+
+        With no handles at all the whole server is shown, so `include_server`
+        only matters alongside handles of your own.
+
+        `official` is honoured as far as it can be: Codeforces no longer
+        accepts the showUnofficial parameter, so the standings arrive with
+        everyone in them and only Educational rounds get filtered back down.
         """
-        Shows ranklist for the contest with given contest id. If handles contains
-        '+server', all server members are included. No handles defaults to '+server'.
-        Use '+official' for only showing rated participants for the round
-        """
-        (show_official,), handles = cf_common.filter_flags(args.split(), ['+official'])
-        handles = await cf_common.resolve_handles(ctx, self.member_converter, handles, maxcnt=None,
+        names = handles.split()
+        if include_server:
+            names.append('+server')
+        handles = await cf_common.resolve_handles(ctx, self.member_converter, names, maxcnt=None,
                                                   default_to_all_server=True)
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
         wait_msg = await ctx.channel.send('Generating ranklist, please wait...')
         ranklist = None
         try:
-            ranklist = cf_common.cache2.ranklist_cache.get_ranklist(contest, show_official)
+            ranklist = cf_common.cache2.ranklist_cache.get_ranklist(contest, official)
         except cache_system2.RanklistNotMonitored:
             if contest.phase == 'BEFORE':
                 raise ContestCogError(f'Contest `{contest.id} | {contest.name}` has not started')
             ranklist = await cf_common.cache2.ranklist_cache.generate_ranklist(contest.id, fetch_changes=True,
-                                                                               show_unofficial=not show_official)
+                                                                               show_unofficial=not official)
 
         await wait_msg.delete()
         await ctx.send(embed=self._make_contest_embed_for_ranklist(ranklist))
