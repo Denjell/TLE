@@ -250,13 +250,23 @@ syntax `SubFilter.parse` exists to read. That is the pattern to copy for the
 commands still listed above. It drops the prefix form of each, which is
 acceptable here because nobody mentions the bot to invoke them.
 
-**Still on one `args` field:** `plot rating`, `plot performance`,
-`plot extreme`, `plot centile`, `plot visualrank`, `teamrate`, `ranklist`,
-`gitgudders`, `monthlygitgudders`, `training start`, `fullsolve`. Of these
-only `fullsolve` genuinely wants a single free-text field. `ranklist` also
-parses `+official` into a `show_unofficial` argument that three of its
-ranklist call sites drop on the floor, so the flag currently does nothing —
-unrelated to intents, but worth fixing when it converts.
+`plot rating`, `plot performance`, `plot extreme`, `plot centile`,
+`plot visualrank`, `teamrate` and `ranklist` followed, with booleans in place
+of their `+flag` words and a real option in place of the `+server` handle.
+
+**Still on one `args` field:** `gitgudders`, `monthlygitgudders`,
+`training start`, `fullsolve`. Of these only `fullsolve` genuinely wants a
+single free-text field.
+
+**Not a bug in `ranklist`.** `+official` was reported here earlier as being
+dropped by the ranklist call sites. It is not: `generate_ranklist` passes it
+down to `cf.contest.standings`, which deliberately discards it because the
+current Codeforces API rejects every parameter but `contestId`
+([codeforces_api.py](tle/util/codeforces_api.py)) — the same change that
+produced the `got count` log lines. The practical effect is the same (only
+Educational rounds get filtered back down, by `remove_unofficial_contestants`)
+but the fix would be client-side filtering to `CONTESTANT` rows in
+`_get_contest_details`, not a corrected argument.
 
 ### 6.3 Variadic typed parameters — 7 commands
 
