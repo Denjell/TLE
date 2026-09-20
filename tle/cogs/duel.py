@@ -5,6 +5,9 @@ import asyncio
 import logging
 import itertools
 
+from typing import Optional
+
+from discord import app_commands
 from discord.ext import commands
 from collections import defaultdict, namedtuple
 from matplotlib import pyplot as plt
@@ -15,6 +18,7 @@ from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import paginator
 from tle.util import discord_common
+from tle.util import filters
 from tle.util import table
 from tle.util import graph_common as gc
 from tle.util.elo import _ELO_CONSTANT
@@ -56,13 +60,6 @@ def rating2rank(rating):
     for rank in DUEL_RANKS:
         if rank.low <= rating < rank.high:
             return rank
-
-
-def parse_nohandicap(args):
-    for arg in args:
-        if arg == "nohandicap":
-            return True
-    return False
 
 
 class DuelCogError(commands.CommandError):
@@ -205,12 +202,34 @@ class Dueling(commands.Cog):
         embed.add_field(name='Channel', value=channel.mention)
         await ctx.send(embed=embed)
 
-    @duel.command(brief='Challenge to a duel', usage='opponent [rating] [+tag..] [~tag..] [+divX] [~divX] [nohandicap] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def challenge(self, ctx, opponent: discord.Member, *, args: str = ''):
-        """Challenge another server member to a duel. Problem difficulty will be the lesser of duelist ratings minus 400. You can alternatively specify a different rating. 
-        All duels will be rated. The challenge expires if ignored for 5 minutes.
-        The bot will allow the lower rated duelist to take more time for the duel. 
-        If the keyword 'nohandicap' is added there will be no handicap for the higher rated duelist."""
+    @duel.command(brief='Challenge to a duel')
+    @filters.describe(
+        'tags', 'exclude_tags', 'division', 'exclude_division',
+        opponent='The server member to challenge.',
+        rating='Problem rating. Defaults to the lower duelist rating minus 400.',
+        after='Only problems from contests on this date or later, as 2024 or 2024-03-01.',
+        before='Only problems from contests before this date, as 2024 or 2024-03-01.',
+        nohandicap='Give the higher rated duelist no extra time handicap.')
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete)
+    async def challenge(self, ctx, opponent: discord.Member,
+                        rating: Optional[filters.ProblemRating] = None,
+                        tags: str = '',
+                        exclude_tags: str = '',
+                        division: Optional[filters.Division] = None,
+                        exclude_division: Optional[filters.Division] = None,
+                        after: Optional[str] = None,
+                        before: Optional[str] = None,
+                        nohandicap: bool = False):
+        """Challenge another server member to a duel.
+
+        The problem is rated 400 below the lower of the two duelist ratings
+        unless `rating` says otherwise. Every duel is rated, and the challenge
+        expires if it is ignored for 5 minutes.
+
+        The lower rated duelist is given extra time by default; `nohandicap`
+        turns that off.
+        """
         # check if we are in the correct channel
         self._checkIfCorrectChannel(ctx)
 
@@ -237,20 +256,14 @@ class Dueling(commands.Cog):
             raise DuelCogError(
                 f'{opponent.mention} is currently in a duel!')
                 
-        # Slash commands have no variadic parameter, so the filters arrive as
-        # one field and are split here. Prefix invocations are unaffected.
-        args = args.split()
-        tags = cf_common.parse_tags(args, prefix='+')
-        bantags = cf_common.parse_tags(args, prefix='~')
-        rating = cf_common.parse_rating(args)
-        nohandicap = parse_nohandicap(args)
+        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        dlo, dhi = filters.date_range(after, before)
         users = [cf_common.user_db.fetch_cf_user(handle) for handle in handles]
         lowest_rating = min(user.effective_rating or 0 for user in users)
         suggested_rating = round(lowest_rating, -2) + _DUEL_RATING_DELTA
         rating = round(rating, -2) if rating else suggested_rating
         rating = min(3500, max(rating, 800))
         unofficial = rating > _DUEL_OFFICIAL_CUTOFF #suggested_rating
-        dlo,dhi = cf_common.parse_daterange(args)
         if not nohandicap:
             dtype = DuelType.ADJUNOFFICIAL if unofficial else DuelType.ADJOFFICIAL
         else:
@@ -906,7 +919,8 @@ class Dueling(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @discord_common.send_error_if(DuelCogError, cf_common.ResolveHandleError)
+    @discord_common.send_error_if(DuelCogError, cf_common.ResolveHandleError,
+                                  cf_common.FilterError)
     async def cog_command_error(self, ctx, error):
         pass
 
