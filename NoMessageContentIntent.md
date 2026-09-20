@@ -234,16 +234,29 @@ unquoted in practice, so the risk is low, but each of the 25 needs its parsing
 helper (`cf_common.parse_tags`, the per-cog filter parsers) re-checked to
 confirm it receives a list of the same shape.
 
-**Three have since gone further.** `gitgud`, `gimme` and `stalk` now take
-labelled options instead of one `args` field: comma separated `tags` /
-`exclude_tags` with autocomplete, `division` / `exclude_division` dropdowns,
-`Range` rating bounds, and `after` / `before` dates. `stalk` also turns its
-four submission-type flags into one autocompleted comma separated field, and
-`+hardest` / `+team` / `c+` / `i+` into `sort` / `include_team` / `contests` /
-`indices`. The shared helpers live on the `Codeforces` cog
-([codeforces.py](tle/cogs/codeforces.py)) and are the pattern to copy for the
-rest of the filter commands. This drops the prefix form of those three, which
-is acceptable here because nobody mentions the bot to invoke them.
+**Eleven have since gone further** and take labelled options instead of an
+`args` field: comma separated `tags` / `exclude_tags` with autocomplete,
+`division` / `exclude_division` dropdowns, `Range` rating bounds, `after` /
+`before` dates, an autocompleted comma separated `types`, and `contests` /
+`indices` / `include_team` where the command had `c+` / `i+` / `+team`.
+
+`gitgud`, `gimme`, `stalk`, `vc`, `mashup`, `duel challenge`, `plot solved`,
+`plot curve`, `plot hist`, `plot scatter`, `plot speed`.
+
+The shared pieces live in [filters.py](tle/util/filters.py) — descriptions,
+autocomplete callbacks, the date parser, and `build_sub_filter`, which
+assigns a `SubFilter` directly rather than round-tripping through the string
+syntax `SubFilter.parse` exists to read. That is the pattern to copy for the
+commands still listed above. It drops the prefix form of each, which is
+acceptable here because nobody mentions the bot to invoke them.
+
+**Still on one `args` field:** `plot rating`, `plot performance`,
+`plot extreme`, `plot centile`, `plot visualrank`, `teamrate`, `ranklist`,
+`gitgudders`, `monthlygitgudders`, `training start`, `fullsolve`. Of these
+only `fullsolve` genuinely wants a single free-text field. `ranklist` also
+parses `+official` into a `show_unofficial` argument that three of its
+ranklist call sites drop on the floor, so the flag currently does nothing —
+unrelated to intents, but worth fixing when it converts.
 
 ### 6.3 Variadic typed parameters — 7 commands
 
