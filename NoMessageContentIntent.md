@@ -8,6 +8,14 @@ here; see [Out of scope](#out-of-scope).
 
 This plan is written against the code on `master`.
 
+> **Status (2026-09-29): phase 1 is functionally complete and has been running
+> live since.** All 11 cogs are converted; every command that used to read a
+> free-text `args` field now has labelled slash options. The one deliberate
+> exception is `starboard`, left degraded on purpose (§6.7) — everything else
+> in this document is done. See [§9. Final status](#9-final-status) for the
+> full account of what shipped, what was found along the way, and what is
+> still open.
+
 ---
 
 ## 1. Goal
@@ -556,18 +564,134 @@ command tree" errors without connecting to Discord.
 
 These block specific stages and need an answer before that stage starts:
 
-1. **Starboard** (§6.7) — link-only entries, or remove the cog?
+1. **Starboard** (§6.7) — link-only entries, or remove the cog? **Still open.**
+   Deliberately left undone; the cog is quietly broken in the meantime (§6.7).
 2. **`ratedvc` / `remind here`** (§6.3) — string parameter, or leave prefix-only?
-3. **Lockout wizard** (§6.8) — signature parameters, or modal?
+   **Resolved: string parameter.** Both take `members: str`, split and resolved
+   through `_resolve_members`/`resolve_handles` — the same pattern as `vc` and
+   `stalk`'s `handles` field.
+3. **Lockout wizard** (§6.8) — signature parameters, or modal? **Resolved:
+   signature parameters.** `round challenge` takes `ratings`, `points`,
+   `duration`, `repeat`, and up to five `member1..member5` options; the 5-step
+   chat wizard (`_get_time_response`/`_get_seq_response`) is gone.
 4. **Aliases** (§6.11) — which, if any, get their own slash command?
+   **Resolved: none.** discord.py has no concept of an app-command alias, and
+   none were promoted to a second top-level slash command — every alias stays
+   reachable only as `@TLE <alias>` or `;<alias>` (mention-only, see §6.11).
 5. **Renames** (§6.9) — confirm `_nogud` → `forceskip`, `duel _invalidate` →
-   `forceinvalidate`, and accept the prefix-name break.
+   `forceinvalidate`, and accept the prefix-name break. **Resolved and done,**
+   plus two more the same pattern turned up: `contests._unregistervc` →
+   `unregistervc`, `handles._updatestatus` → `updatestatus`,
+   `round _invalidate` → `round invalidate`. All five keep the old name as an
+   alias, so `;_nogud` etc. still work when mentioning the bot.
 6. **Admin command visibility** (§6.6) — hide with `default_permissions`, or
-   accept that they show up for everyone?
+   accept that they show up for everyone? **Still open, unaddressed.** Every
+   admin/moderator command still uses `@commands.has_role`/`has_any_role`,
+   which discord.py enforces at invocation time only — the slash command is
+   visible and listed for every member, and a non-admin who tries it gets the
+   `CheckFailure` alert embed (`discord_common.py`) rather than not seeing the
+   command at all. Cosmetic, not a security gap, but worth `default_permissions`
+   if it comes up.
 
 ---
 
-## Out of scope
+## 9. Final status
+
+Written 2026-09-29, after the last commit on this branch. This section is the
+one-stop summary; everything in it is expanded elsewhere in this document.
+
+### What shipped
+
+- **The privileged intent is gone.** [`tle/__main__.py`](tle/__main__.py) no
+  longer requests `message_content`; only `intents.members` remains (Server
+  Members is out of scope here, see below).
+- **All 11 cogs converted to hybrid commands** — `meta`, `cache_control`,
+  `contests`, `duel`, `handles`, `graphs`, `training`, `codeforces`, `lockout`,
+  `logging` (no commands to convert), plus the help command itself
+  (`TleHelp`). The one exception is `starboard`, deferred on purpose (§6.7).
+- **Sync and interaction plumbing** (`__main__.py`): `bot.tree.sync()` on
+  startup, a global `before_invoke` hook that defers every interaction once
+  instead of 118 times, and stale-global-command cleanup when syncing to a
+  dev guild.
+- **No command takes a free-text `args` field any more.** Every one of the ~30
+  commands that used to parse a prefix-flag string (`+tag`, `~tag`, `r>=1500`,
+  `d>=012024`, `+official`, `div2`, …) now has real labelled slash options —
+  `Range`/`Literal` types, dropdowns, and autocomplete for tags, submission
+  types, and `/vc`'s contest-name patterns. The shared pieces (date parsing,
+  tag/division splitting, `SubFilter` construction, autocomplete callbacks)
+  live in one place, [`tle/util/filters.py`](tle/util/filters.py), rather than
+  copied per command.
+- **The result: 114 application commands across 36 top-level entries**,
+  verified against Discord's actual limits (100 top-level, 25
+  options/subcommands, 100-char descriptions, 25 autocomplete choices, …) by
+  [`extra/check_app_commands.py`](extra/check_app_commands.py), an offline
+  tree-builder written for this migration. It also catches the
+  `CommandSignatureMismatch` class of bug (§6.1) before Discord would.
+- **The bot runs natively in WSL** (`run.sh`, no Docker) against Python 3.11.3,
+  matching the target deployment's 3.11.2. See the WSL setup memories for the
+  environment traps that come with that (stale lock, PyGObject, the dead Noto
+  font URL, `nohup` dying when no client is attached to the distro).
+- **34 commits** on this branch (`master..HEAD`), each independently
+  buildable and, with only a couple of exceptions, each restarted and
+  live-tested against the real bot before moving to the next.
+
+### Bugs found and fixed along the way (none of them intent-related)
+
+These were latent on `master` and surfaced only because converting a command
+meant actually reading what its old parsing did:
+
+- **`gitgudders`/`monthlygitgudders`'s division filter and `+all` flag had
+  done nothing since `c9cea02`** — a regression from this branch's own
+  handles conversion, where `*args` became a plain string and `for arg in
+  args` started iterating *characters*. No single character starts with
+  `'div'` or equals `'+all'`, so both silently no-opped for however long that
+  commit was live. Options can't fail that way; fixed by construction when
+  those two commands converted.
+- **`plot extreme`/`plot scatter` crashed on two handles** with a bare,
+  unhandled `ValueError` — logged as an exception, answered with nothing (an
+  interaction, "the application did not respond"). Both now raise `GraphCogError
+  ('Only one handle allowed.')`.
+- **`duel challenge` never routed `cf_common.FilterError` to the alert embed**
+  that every other filter-using cog has. A bad date in the old `d>=` flag
+  logged a traceback and left the interaction unanswered. Fixed alongside its
+  conversion.
+- **`contest.standings` was being asked for parameters the current Codeforces
+  API rejects** (`count`, `showUnofficial`, …) — logged as an error on every
+  call. Traced, and the caching path fixed to ask for only `contest_id`
+  (commit `6dd7c92`). `ranklist`'s `official` option still can't reach the API
+  this way (documented in §6.12/the open-decisions list above) — that's a
+  Codeforces API limitation, not a bug in this branch.
+
+### Deliberately not done
+
+- **`starboard`** (§6.7). Quietly broken as of this branch: the reaction
+  trigger still fires, then every message is rejected because `content` and
+  `attachments` are always empty without the intent, logged at info level with
+  no user-visible error. A fix is designed (context-menu "Star this message"
+  + reactions for the threshold, §6.7's option A+) but unverified — it rests
+  on an untested assumption about what Discord puts in a context-menu
+  interaction's resolved-message payload for an app without the intent.
+- **Production cutover** (§6.6a). This branch has only ever synced to one
+  dev guild. Going to a real, multi-guild deployment means a guild→global
+  sync switch, and cleaning up the registrations the five September renames
+  (§6.9) leave orphaned under their old names in whatever scope they were
+  last synced to.
+- **Admin command visibility** (open decision #6, above) — cosmetic only.
+- **The `SERVER MEMBERS` intent** — always out of scope for this document; see
+  below.
+
+### How to verify this yourself
+
+1. `python extra/check_app_commands.py` — offline, no token needed, checks
+   every cog against Discord's real limits.
+2. In WSL: `cd ~/TLE && ./run.sh`, watch for `Synced 36 app commands to guild
+   <id>` in the log with no `ERROR`/`Traceback` on startup.
+3. Pick a handful of the converted commands — `/gitgud`, `/stalk`, `/vc`,
+   `/plot solved` — and confirm the options, autocomplete, and dropdowns show
+   up as expected in Discord's own UI; that's the one thing the offline
+   checker can't see.
+
+---
 
 **The `SERVER MEMBERS` intent.** It is a separate and largely independent piece
 of work, touching `guild.get_member()` / `guild.members` / `bot.get_all_members()`
