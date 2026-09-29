@@ -895,8 +895,11 @@ class Handles(commands.Cog):
 
         change_by_handle = {change.handle: change for change in changes}
         rankup_embeds = self._make_rankup_embeds(ctx.guild, contest, change_by_handle)
+        # Through ctx rather than the channel: for a slash invocation that is
+        # what answers the deferred interaction, which would otherwise sit on
+        # 'thinking...' beside the embeds until it timed out.
         for rankup_embed in rankup_embeds:
-            await ctx.channel.send(embed=rankup_embed)
+            await ctx.send(embed=rankup_embed)
 
     async def _generic_remind(self, ctx, action, role_name, what):
         roles = [role for role in ctx.guild.roles if role.name == role_name]
