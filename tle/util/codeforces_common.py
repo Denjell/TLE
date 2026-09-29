@@ -2,6 +2,7 @@ import functools
 import json
 import logging
 import math
+import re
 import time
 import datetime
 from collections import defaultdict
@@ -224,9 +225,11 @@ def days_ago(t):
         return 'yesterday'
     return f'{math.floor(days)} days ago'
 
+_MENTION_RE = re.compile(r'<@!?\d+>')
+
 async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, default_to_all_server=False):
-    """Convert an iterable of strings to CF handles. A string beginning with ! indicates Discord username,
-     otherwise it is a raw CF handle to be left unchanged."""
+    """Convert an iterable of strings to CF handles. A string beginning with ! or a <@id> mention
+     indicates a Discord user, otherwise it is a raw CF handle to be left unchanged."""
     handles = set(handles)
     if default_to_all_server and not handles:
         handles.add('+server')
@@ -239,9 +242,13 @@ async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, defaul
         raise HandleCountOutOfBoundsError(mincnt, maxcnt)
     resolved_handles = []
     for handle in handles:
-        if handle.startswith('!'):
+        # A mention typed into a slash command's text option arrives as the raw
+        # <@id> markup rather than as a Member, so it names a Discord user just
+        # as ! does. The member converter reads the markup itself.
+        mention = _MENTION_RE.fullmatch(handle)
+        if handle.startswith('!') or mention:
             # ! denotes Discord user
-            member_identifier = handle[1:]
+            member_identifier = handle if mention else handle[1:]
             # suffix removal as quickfix for new username changes
             if member_identifier[-2:] == '#0':
                 member_identifier = member_identifier[:-2]
