@@ -227,6 +227,22 @@ def parse_date(text, field):
         'a month (2024-03) or a day (2024-03-01).')
 
 
+def parse_month(text, field):
+    """Parse a month option into the timestamp of its first day.
+
+    parse_date also takes a bare year or a full date, which a month field would
+    then quietly read as January or as the month around that day, so only the
+    month forms are let through.
+    """
+    if len(text.translate(_DATE_SEPARATORS)) == 6:
+        try:
+            return parse_date(text, field)
+        except cf_common.ParamParseError:
+            pass
+    raise cf_common.ParamParseError(
+        f'`{text}` is not a valid month for `{field}`. Give it as 2024-03.')
+
+
 def date_range(after, before):
     """Turn the after/before options into the (dlo, dhi) pair used everywhere."""
     dlo = 0 if after is None else parse_date(after, 'after')

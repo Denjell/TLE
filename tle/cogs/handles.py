@@ -577,7 +577,7 @@ class Handles(commands.Cog):
         """Show the gitgud ranklist for one month."""
         now = datetime.datetime.now()
         if month is not None:
-            now = datetime.datetime.fromtimestamp(filters.parse_date(month, 'month'))
+            now = datetime.datetime.fromtimestamp(filters.parse_month(month, 'month'))
 
         start_time, end_time = cf_common.get_start_and_end_of_month(now)
         
@@ -929,7 +929,8 @@ class Handles(commands.Cog):
         else:
             raise HandleCogError(f'Invalid role {which}')
 
-    @discord_common.send_error_if(HandleCogError, cf_common.HandleIsVjudgeError)
+    @discord_common.send_error_if(HandleCogError, cf_common.HandleIsVjudgeError,
+                                  cf_common.FilterError)
     async def cog_command_error(self, ctx, error):
         pass
 
