@@ -274,7 +274,7 @@ class Codeforces(commands.Cog):
             max_rating=max_rating, after=after, before=before, types=types,
             contests=contests, indices=indices, include_team=include_team)
 
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         submissions = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for subs in submissions for sub in subs]
@@ -327,7 +327,7 @@ class Codeforces(commands.Cog):
         delta = 100 + round(delta, -2)
         tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
 
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for user in resp for sub in user]
@@ -617,7 +617,7 @@ class Codeforces(commands.Cog):
         # A leading '+' was how the old single-field syntax told a pattern from
         # a handle. It carries no meaning now, but is cheap to forgive.
         markers = [pattern.lstrip('+') for pattern in filters.split_list(patterns)]
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=25)
         info = await cf.user.info(handles=handles)
         contests = cf_common.cache2.contest_cache.get_contests_in_phase('FINISHED')
@@ -746,7 +746,7 @@ class Codeforces(commands.Cog):
         A handle may carry a multiplier, as in `gamegame*1000`, to count that
         person more than once.
         """
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
 
         def rating(user):
             return user.maxRating if peak else user.rating

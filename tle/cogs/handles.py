@@ -648,9 +648,9 @@ class Handles(commands.Cog):
         """Shows members of the server who have registered their handles and
         their Codeforces ratings. You can additionally specify a list of countries
         if you wish to display only members from those countries. Country data is
-        sourced from codeforces profiles. e.g. /handle list Croatia Slovenia
+        sourced from codeforces profiles. e.g. /handle list Croatia Slovenia "United States"
         """
-        countries = [country.title() for country in countries.split()]
+        countries = [country.title() for country in filters.split_words(countries)]
         res = cf_common.user_db.get_cf_users_for_guild(ctx.guild.id)
         users = [(ctx.guild.get_member(user_id), cf_user.handle, cf_user.rating)
                  for user_id, cf_user in res if not countries or cf_user.country in countries]

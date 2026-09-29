@@ -11,6 +11,7 @@ Everything raised here is a ParamParseError, so any cog that already routes
 cf_common.FilterError to an alert embed can use these unchanged.
 """
 import datetime
+import shlex
 import time
 from typing import Literal, get_args
 
@@ -54,7 +55,7 @@ SubmissionRating = app_commands.Range[int, 500, 3800]
 
 _DESCRIPTIONS = {
     'handle': 'A Codeforces handle or Discord mention. Defaults to you.',
-    'handles': 'Codeforces handles or Discord mentions, space separated. Defaults to you.',
+    'handles': 'Codeforces handles or Discord mentions, space separated; quote names with spaces. Defaults to you.',
     'tags': 'Only problems with these tags, comma separated.',
     'exclude_tags': 'Skip problems with these tags, comma separated.',
     'division': 'Only problems from this division.',
@@ -134,6 +135,27 @@ async def submission_type_autocomplete(interaction, current: str):
 def split_list(text):
     """Split a comma separated field into its entries."""
     return [entry.strip() for entry in text.split(',') if entry.strip()]
+
+
+def split_words(text):
+    """Split a space separated field, keeping a "double quoted" run together.
+
+    The prefix parser used to do this for free, and it is what lets a field
+    hold `"!name with spaces"` or a country such as `"United States"`. Only
+    double quotes group, so an apostrophe in a name is just a character, and
+    neither '#' (as in a `name#0` username) nor a backslash means anything.
+    """
+    lexer = shlex.shlex(text, posix=True)
+    lexer.whitespace_split = True
+    lexer.quotes = '"'
+    lexer.escape = ''
+    lexer.commenters = ''
+    try:
+        return list(lexer)
+    except ValueError:
+        # An unclosed quote. Reading the text as plain words is what the field
+        # did before quoting was understood, and it beats refusing outright.
+        return text.split()
 
 
 def split_tags(text, field, *, tags_cost_points=False):

@@ -499,7 +499,7 @@ class Contests(commands.Cog):
         accepts the showUnofficial parameter, so the standings arrive with
         everyone in them and only Educational rounds get filtered back down.
         """
-        names = handles.split()
+        names = filters.split_words(handles)
         if include_server:
             names.append('+server')
         handles = await cf_common.resolve_handles(ctx, self.member_converter, names, maxcnt=None,
@@ -561,7 +561,7 @@ class Contests(commands.Cog):
         raises MemberNotFound, which the error handler reports as user input.
         """
         return [await self.member_converter.convert(ctx, token)
-                for token in members.split()]
+                for token in filters.split_words(members)]
 
     @commands.hybrid_command(brief='Start a rated vc.', usage='<contest_id> <@user1 @user2 ...>')
     async def ratedvc(self, ctx, contest_id: int, *, members: str = ''):

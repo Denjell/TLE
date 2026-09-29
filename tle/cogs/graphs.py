@@ -248,7 +248,7 @@ class Graphs(commands.Cog):
                      before: Optional[str] = None):
         """Plots Codeforces rating graph for the handles provided."""
         filt = filters.build_sub_filter(after=after, before=before)
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.rating(handle=handle) for handle in handles]
         resp = [filt.filter_rating_changes(rating_changes) for rating_changes in resp]
@@ -315,7 +315,7 @@ class Graphs(commands.Cog):
                           before: Optional[str] = None):
         """Plots Codeforces performance graph for the handles provided."""
         filt = filters.build_sub_filter(after=after, before=before)
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.rating(handle=handle) for handle in handles]
         # extract last rating before corrections
@@ -387,7 +387,7 @@ class Graphs(commands.Cog):
             raise GraphCogError('Turning off both `solved` and `unsolved` leaves nothing to plot.')
         filt = filters.build_sub_filter(after=after, before=before)
 
-        names = handle.split() or ['!' + str(ctx.author)]
+        names = filters.split_words(handle) or ['!' + str(ctx.author)]
         if len(names) > 1:
             raise GraphCogError('Only one handle allowed.')
         handle, = await cf_common.resolve_handles(ctx, self.converter, names)
@@ -443,7 +443,7 @@ class Graphs(commands.Cog):
             exclude_division=exclude_division, min_rating=min_rating,
             max_rating=max_rating, after=after, before=before, types=types,
             contests=contests, indices=indices, include_team=include_team)
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
@@ -516,7 +516,7 @@ class Graphs(commands.Cog):
             contests=contests, indices=indices, include_team=include_team)
         phase_time = dt.timedelta(days=phase_days)
 
-        handles = handles.split() or ['!' + str(ctx.author)]
+        handles = filters.split_words(handles) or ['!' + str(ctx.author)]
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
@@ -604,7 +604,7 @@ class Graphs(commands.Cog):
             exclude_division=exclude_division, min_rating=min_rating,
             max_rating=max_rating, after=after, before=before, types=types,
             contests=contests, indices=indices, include_team=include_team)
-        handles = handles.split() or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
@@ -666,7 +666,7 @@ class Graphs(commands.Cog):
             exclude_division=exclude_division, min_rating=min_rating,
             max_rating=max_rating, after=after, before=before, types=types,
             contests=contests, indices=indices, include_team=include_team)
-        names = handle.split() or ['!' + str(ctx.author)]
+        names = filters.split_words(handle) or ['!' + str(ctx.author)]
         if len(names) > 1:
             raise GraphCogError('Only one handle allowed.')
         handle, = await cf_common.resolve_handles(ctx, self.converter, names)
@@ -831,7 +831,7 @@ class Graphs(commands.Cog):
 
         users_to_mark = {}
         if mark_handles:
-            handles = handles.split() or ('!' + str(ctx.author),)
+            handles = filters.split_words(handles) or ('!' + str(ctx.author),)
             handles = await cf_common.resolve_handles(ctx,
                                                       self.converter,
                                                       handles,
@@ -966,7 +966,7 @@ class Graphs(commands.Cog):
          swarmplot of members by country and rating. Only members with registered handles and
          countries set on Codeforces are considered.
          """
-        countries = countries.split()
+        countries = filters.split_words(countries)
         max_countries = 8
         if len(countries) > max_countries:
             raise GraphCogError(f'At most {max_countries} countries may be specified.')
@@ -1041,7 +1041,7 @@ class Graphs(commands.Cog):
                          server_only: bool = False,
                          zoom: bool = False):
         """Plot rating changes by rank, marking the handles given."""
-        handles = await cf_common.resolve_handles(ctx, self.converter, handles.split(),
+        handles = await cf_common.resolve_handles(ctx, self.converter, filters.split_words(handles),
                                                   mincnt=0, maxcnt=20)
 
         rating_changes = await cf.contest.ratingChanges(contest_id=contest_id)
@@ -1157,7 +1157,7 @@ class Graphs(commands.Cog):
         if 'PRACTICE' in filt.types:
             filt.types.remove('PRACTICE')  # can't estimate time for practice submissions
 
-        handles = handles.split() or ['!' + str(ctx.author)]
+        handles = filters.split_words(handles) or ['!' + str(ctx.author)]
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
