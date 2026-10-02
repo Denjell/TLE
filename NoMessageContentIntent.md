@@ -245,11 +245,13 @@ confirm it receives a list of the same shape.
 **Eleven have since gone further** and take labelled options instead of an
 `args` field: comma separated, autocompleted `tags` / `exclude_tags` and
 `division` / `exclude_division` (multi-select, same as the tag fields —
-`division` started as a single-choice dropdown and was generalized once
-multiple divisions turned out to be a real thing to want), `Range` rating
-bounds, `after` / `before` dates, an autocompleted comma separated `types`,
-and `contests` / `indices` / `include_team` where the command had `c+` / `i+`
-/ `+team`.
+`division` started as a single-choice dropdown and was briefly made OR rather
+than AND for picking several, which real usage pushed back on: it now matches
+exactly as `master`'s `+div2`/`~div2` always did, folded into `tags`/`bantags`
+and matched the same way — `division: div2, div3` means "both at once", not
+"either"), `Range` rating bounds, `after` / `before` dates, an autocompleted
+comma separated `types`, and `contests` / `indices` / `include_team` where the
+command had `c+` / `i+` / `+team`.
 
 `gitgud`, `gimme`, `stalk`, `vc`, `mashup`, `duel challenge`, `plot solved`,
 `plot curve`, `plot hist`, `plot scatter`, `plot speed`.

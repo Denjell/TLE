@@ -108,21 +108,21 @@ rather than re-declaring them: `ProblemRating`/`SubmissionRating` types,
 `division`/`exclude_division` are comma separated, multi-select fields, the
 same interface `tags` has — `division_autocomplete` suggests the five
 division tags (`div1`…`edu`) and preserves what's already typed. They are
-kept apart from the free-text `tags` option deliberately: TLE writes division
-tags onto `Problem.tags` itself when caching problemsets, and for `/gitgud`
-specifically a real tag costs 200 points while `division` costs nothing, so a
-plain tag filter accepting them silently would be a loophole.
-
-`problem_tags()` returns divisions as a list separate from `tags`/`bantags`,
-not folded into either — a combined Div. 1 + Div. 2 round carries *both*
-division tags on its problems, so picking `div2, div3` has to mean "either",
-which `Problem.matches_all_tags` (what `tags` is ANDed with) cannot express.
-It's checked with `matches_any_tag` (OR) instead, both inline in the three
-commands that build their own problem filter (`gimme`, `mashup`, `gitgud`,
-plus `duel challenge`) and via `SubFilter.divisions`/`division_ok` in
-`filter_subs` for everything routed through `build_sub_filter()`.
-`exclude_division` has no such wrinkle — excluding already means "matches any
-of these" — so it folds straight into `bantags` alongside `exclude_tags`.
+kept apart from the free-text `tags` option for scoring purposes only: TLE
+writes division tags onto `Problem.tags` itself when caching problemsets, and
+for `/gitgud` specifically a real tag costs 200 points while `division` costs
+nothing, so a plain tag filter accepting them silently would be a loophole.
+Matching itself is not special-cased, though: `problem_tags()` folds
+`division` straight into `tags` and `exclude_division` into `bantags`, so
+both are matched exactly like real tags always have been —
+`Problem.matches_all_tags` (AND) for `tags`, `matches_any_tag` (OR, i.e.
+"banned if it has any of these") for `bantags`. Multi-select `division`
+therefore means AND, same as `master` always did when `+div2 +div3` were two
+ordinary tags: `division: div2, div3` only matches a problem that is both at
+once (a combined Div. 1 + Div. 2 round), which is deliberate, confirmed by
+user feedback, not a bug — a from-scratch design would plausibly want OR
+here (and an earlier version of this branch had it), but matching master's
+long-standing behavior won out.
 
 ### Caching (`tle/util/cache_system2.py`, `tle/util/db/cache_db_conn.py`)
 
