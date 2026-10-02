@@ -339,6 +339,11 @@ class SubFilter:
         self.types = []
         self.tags = []
         self.bantags = []
+        # Checked separately from tags, via matches_any_tag rather than
+        # matches_all_tags: a problem commonly carries more than one division
+        # tag at once (a combined round), so asking for several divisions has
+        # to mean "any of them", which ANDing into tags cannot express.
+        self.divisions = []
         self.contests = []
         self.indices = []
 
@@ -417,6 +422,7 @@ class SubFilter:
             date_ok = self.dlo <= submission.creationTimeSeconds < self.dhi
             tag_ok = problem.matches_all_tags(self.tags)
             bantag_ok = not problem.matches_any_tag(self.bantags)
+            division_ok = not self.divisions or problem.matches_any_tag(self.divisions)
             index_ok = not self.indices or any(index.lower() == problem.index.lower() for index in self.indices)
             contest_ok = not self.contests or (contest and contest.matches(self.contests))
             team_ok = self.team or len(submission.author.members) == 1
@@ -428,7 +434,8 @@ class SubFilter:
                 problem_ok = (not contest or contest.id >= cf.GYM_ID_THRESHOLD
                               or not is_nonstandard_problem(problem))
                 rating_ok = True
-            if type_ok and date_ok and rating_ok and tag_ok and bantag_ok and team_ok and problem_ok and contest_ok and index_ok:
+            if (type_ok and date_ok and rating_ok and tag_ok and bantag_ok and division_ok
+                    and team_ok and problem_ok and contest_ok and index_ok):
                 filtered_subs.append(submission)
         return filtered_subs
 

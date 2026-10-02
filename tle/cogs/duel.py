@@ -211,13 +211,15 @@ class Dueling(commands.Cog):
         before='Only problems from contests before this date, as 2024 or 2024-03-01.',
         nohandicap='Give the higher rated duelist no extra time handicap.')
     @app_commands.autocomplete(tags=filters.tag_autocomplete,
-                               exclude_tags=filters.tag_autocomplete)
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     async def challenge(self, ctx, opponent: discord.Member,
                         rating: Optional[filters.ProblemRating] = None,
                         tags: str = '',
                         exclude_tags: str = '',
-                        division: Optional[filters.Division] = None,
-                        exclude_division: Optional[filters.Division] = None,
+                        division: str = '',
+                        exclude_division: str = '',
                         after: Optional[str] = None,
                         before: Optional[str] = None,
                         nohandicap: bool = False):
@@ -256,7 +258,7 @@ class Dueling(commands.Cog):
             raise DuelCogError(
                 f'{opponent.mention} is currently in a duel!')
                 
-        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        tags, bantags, divisions, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
         dlo, dhi = filters.date_range(after, before)
         users = [cf_common.user_db.fetch_cf_user(handle) for handle in handles]
         lowest_rating = min(user.effective_rating or 0 for user in users)
@@ -281,6 +283,7 @@ class Dueling(commands.Cog):
                     and not cf_common.is_nonstandard_problem(prob)
                     and prob.matches_all_tags(tags)
                     and not prob.matches_any_tag(bantags)
+                    and (not divisions or prob.matches_any_tag(divisions))
                     and dlo <= cf_common.cache2.contest_cache.get_contest(prob.contestId).startTimeSeconds < dhi]
 
         for problems in map(get_problems, range(rating, 400, -100)):

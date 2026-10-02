@@ -13,7 +13,6 @@ cf_common.FilterError to an alert embed can use these unchanged.
 import datetime
 import shlex
 import time
-from typing import Literal, get_args
 
 from discord import app_commands
 
@@ -23,15 +22,6 @@ from discord import app_commands
 from tle.util import codeforces_common as cf_common
 from tle.util import cache_system2
 
-
-# Divisions are kept apart from ordinary tags. TLE writes them into
-# Problem.tags itself when caching problemsets, so they filter exactly as a tag
-# does, but gitgud charges 200 points for a tag and nothing for a division.
-Division = Literal['div1', 'div2', 'div3', 'div4', 'edu']
-
-if set(get_args(Division)) != set(cache_system2._DIV_TAGS):
-    raise RuntimeError('Division has drifted from cache_system2._DIV_TAGS: '
-                       f'{get_args(Division)} vs {cache_system2._DIV_TAGS}')
 
 # Codeforces participant types, under the names the slash options offer.
 SUBMISSION_TYPES = {
@@ -58,8 +48,8 @@ _DESCRIPTIONS = {
     'handles': 'Codeforces handles or Discord mentions, space separated; quote names with spaces. Defaults to you.',
     'tags': 'Only problems with these tags, comma separated.',
     'exclude_tags': 'Skip problems with these tags, comma separated.',
-    'division': 'Only problems from this division.',
-    'exclude_division': 'Skip problems from this division.',
+    'division': 'Only problems from these divisions, comma separated.',
+    'exclude_division': 'Skip problems from these divisions, comma separated.',
     'min_rating': 'Only problems rated at least this.',
     'max_rating': 'Only problems rated at most this.',
     'after': 'Only submissions from this date on, as 2024, 2024-03 or 2024-03-01.',
@@ -132,6 +122,16 @@ async def submission_type_autocomplete(interaction, current: str):
     return complete_list_field(current, sorted(SUBMISSION_TYPES))
 
 
+async def division_autocomplete(interaction, current: str):
+    """Suggest divisions for a comma separated division/exclude_division field.
+
+    There are only five of these, so each alone would fit a dropdown - the
+    comma separation (and this autocomplete, to spell them correctly) is what
+    lets more than one be picked at once, the same way the tags field does.
+    """
+    return complete_list_field(current, cache_system2._DIV_TAGS)
+
+
 def split_list(text):
     """Split a comma separated field into its entries."""
     return [entry.strip() for entry in text.split(',') if entry.strip()]
@@ -179,22 +179,42 @@ def split_tags(text, field, *, tags_cost_points=False):
     return tags
 
 
+def split_divisions(text, field):
+    """Split a comma separated division field, rejecting anything that is not
+    one of the five division tags.
+    """
+    divisions = split_list(text)
+    unknown = [division for division in divisions if division not in cache_system2._DIV_TAGS]
+    if unknown:
+        raise cf_common.ParamParseError(
+            f'`{", ".join(unknown)}` is not a division for `{field}`. '
+            f'Pick from `{", ".join(cache_system2._DIV_TAGS)}`.')
+    return divisions
+
+
 def problem_tags(tags, exclude_tags, division, exclude_division, *,
                  tags_cost_points=False):
-    """Split the tag fields and fold the division options into them.
+    """Split the tag and division fields.
 
-    Returns (tags, bantags, tagged). `tagged` reports whether a real tag was
-    asked for, which is what gitgud charges 200 points for, and so has to be
-    read before the divisions go in.
+    Returns (tags, bantags, divisions, tagged). `divisions` has to be checked
+    separately, with Problem.matches_any_tag, rather than folded into `tags`
+    and ANDed the way a real tag is: a problem commonly carries more than one
+    division tag at once (a combined Div. 1 + Div. 2 round, say), so asking
+    for `div2, div3` has to mean "either", which ANDing into `tags` cannot
+    express. `exclude_division` has no such problem - excluding already means
+    "matches any of these" - so it folds into `bantags` same as any other
+    banned tag.
+
+    `tagged` reports whether a real tag was asked for, which is what gitgud
+    charges 200 points for; divisions never count towards it, which is why it
+    is read before exclude_division is folded in.
     """
     tags = split_tags(tags, 'tags', tags_cost_points=tags_cost_points)
     bantags = split_tags(exclude_tags, 'exclude_tags', tags_cost_points=tags_cost_points)
     tagged = bool(tags or bantags)
-    if division is not None:
-        tags.append(division)
-    if exclude_division is not None:
-        bantags.append(exclude_division)
-    return tags, bantags, tagged
+    bantags += split_divisions(exclude_division, 'exclude_division')
+    divisions = split_divisions(division, 'division')
+    return tags, bantags, divisions, tagged
 
 
 def split_types(text):
@@ -250,8 +270,8 @@ def date_range(after, before):
     return dlo, dhi
 
 
-def build_sub_filter(*, rated=True, tags='', exclude_tags='', division=None,
-                     exclude_division=None, min_rating=None, max_rating=None,
+def build_sub_filter(*, rated=True, tags='', exclude_tags='', division='',
+                     exclude_division='', min_rating=None, max_rating=None,
                      after=None, before=None, types='', contests='',
                      indices='', include_team=False):
     """Build a SubFilter from the labelled options.
@@ -260,8 +280,8 @@ def build_sub_filter(*, rated=True, tags='', exclude_tags='', division=None,
     syntax back out of a message.
     """
     filt = cf_common.SubFilter(rated)
-    filt.tags, filt.bantags, _ = problem_tags(tags, exclude_tags, division,
-                                              exclude_division)
+    filt.tags, filt.bantags, filt.divisions, _ = problem_tags(
+        tags, exclude_tags, division, exclude_division)
     if min_rating is not None:
         filt.rlo = min_rating
     if max_rating is not None:

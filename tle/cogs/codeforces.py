@@ -172,21 +172,23 @@ class Codeforces(commands.Cog):
         max_rating='Upper bound of a rating range. The rating is then hidden.',
         tags='Only problems with these tags, comma separated.',
         exclude_tags='Never recommend problems with these tags, comma separated.',
-        division='Only problems from this division.',
-        exclude_division='Never recommend problems from this division.',
+        division='Only problems from these divisions, comma separated.',
+        exclude_division='Never recommend problems from these divisions, comma separated.',
         after='Only contests from this date on, as 2024, 2024-03 or 2024-03-01.',
         before='Only contests before this date, as 2024, 2024-03 or 2024-03-01.',
     )
     @app_commands.autocomplete(tags=filters.tag_autocomplete,
-                               exclude_tags=filters.tag_autocomplete)
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     @cf_common.user_guard(group='gitgud')
     async def gimme(self, ctx,
                     rating: Optional[filters.ProblemRating] = None,
                     max_rating: Optional[filters.ProblemRating] = None,
                     tags: str = '',
                     exclude_tags: str = '',
-                    division: Optional[filters.Division] = None,
-                    exclude_division: Optional[filters.Division] = None,
+                    division: str = '',
+                    exclude_division: str = '',
                     after: Optional[str] = None,
                     before: Optional[str] = None):
         """Recommend a problem you have not solved yet.
@@ -209,7 +211,7 @@ class Codeforces(commands.Cog):
         if erating < srating:
             raise CodeforcesCogError(f'`max_rating` ({erating}) is below `rating` ({srating}).')
 
-        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        tags, bantags, divisions, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
         dlo, dhi = filters.date_range(after, before)
 
         submissions = await cf.user.status(handle=handle)
@@ -220,6 +222,7 @@ class Codeforces(commands.Cog):
                     and not cf_common.is_contest_writer(prob.contestId, handle)
                     and prob.matches_all_tags(tags)
                     and not prob.matches_any_tag(bantags)
+                    and (not divisions or prob.matches_any_tag(divisions))
                     and dlo <= cf_common.cache2.contest_cache.get_contest(prob.contestId).startTimeSeconds < dhi]
 
         if not problems:
@@ -246,13 +249,15 @@ class Codeforces(commands.Cog):
                       sort='Most recently solved first (default), or hardest first.')
     @app_commands.autocomplete(tags=filters.tag_autocomplete,
                                exclude_tags=filters.tag_autocomplete,
-                               types=filters.submission_type_autocomplete)
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     async def stalk(self, ctx, handles: str = '',
                     sort: Literal['recent', 'hardest'] = 'recent',
                     tags: str = '',
                     exclude_tags: str = '',
-                    division: Optional[filters.Division] = None,
-                    exclude_division: Optional[filters.Division] = None,
+                    division: str = '',
+                    exclude_division: str = '',
                     min_rating: Optional[filters.SubmissionRating] = None,
                     max_rating: Optional[filters.SubmissionRating] = None,
                     after: Optional[str] = None,
@@ -310,12 +315,14 @@ class Codeforces(commands.Cog):
     @filters.describe('handles', 'tags', 'exclude_tags', 'division', 'exclude_division',
                       delta='Shift the target rating by this much, rounded to 100.')
     @app_commands.autocomplete(tags=filters.tag_autocomplete,
-                               exclude_tags=filters.tag_autocomplete)
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     async def mashup(self, ctx, handles: str = '',
                      tags: str = '',
                      exclude_tags: str = '',
-                     division: Optional[filters.Division] = None,
-                     exclude_division: Optional[filters.Division] = None,
+                     division: str = '',
+                     exclude_division: str = '',
                      delta: app_commands.Range[int, -1000, 1000] = 0):
         """Create a mashup contest of four unsolved problems.
 
@@ -325,7 +332,7 @@ class Codeforces(commands.Cog):
         # The 100 is the long standing default and is kept so that a mashup
         # with no delta picks what it always did.
         delta = 100 + round(delta, -2)
-        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        tags, bantags, divisions, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
 
         handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
@@ -342,7 +349,8 @@ class Codeforces(commands.Cog):
                     and not any(cf_common.is_contest_writer(prob.contestId, handle) for handle in handles)
                     and not cf_common.is_nonstandard_problem(prob)
                     and prob.matches_all_tags(tags)
-                    and not prob.matches_any_tag(bantags)]
+                    and not prob.matches_any_tag(bantags)
+                    and (not divisions or prob.matches_any_tag(divisions))]
 
         if len(problems) < 4:
             raise CodeforcesCogError('Problems not found within the search parameters')
@@ -372,19 +380,21 @@ class Codeforces(commands.Cog):
         max_rating='Upper bound of a rating range. The rating and points are then hidden.',
         tags='Only problems with these tags, comma separated. Costs 200 points.',
         exclude_tags='Never pick problems with these tags, comma separated.',
-        division='Only problems from this division. Costs no points.',
-        exclude_division='Never pick problems from this division.',
+        division='Only problems from these divisions, comma separated. Costs no points.',
+        exclude_division='Never pick problems from these divisions, comma separated.',
     )
     @app_commands.autocomplete(tags=filters.tag_autocomplete,
-                               exclude_tags=filters.tag_autocomplete)
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     @cf_common.user_guard(group='gitgud')
     async def gitgud(self, ctx,
                      rating: Optional[filters.ProblemRating] = None,
                      max_rating: Optional[filters.ProblemRating] = None,
                      tags: str = '',
                      exclude_tags: str = '',
-                     division: Optional[filters.Division] = None,
-                     exclude_division: Optional[filters.Division] = None):
+                     division: str = '',
+                     exclude_division: str = ''):
         """Request a problem to solve for gitgud points.
 
         Points are assigned by the difference between the problem rating and
@@ -429,19 +439,20 @@ class Codeforces(commands.Cog):
         solved = {sub.problem.name for sub in submissions}
         noguds = cf_common.user_db.get_noguds(ctx.author.id)
 
-        # Divisions are folded into the tag lists but must not count towards
-        # the tag penalty, which is what the third value reports.
-        tags, bantags, scored_as_tagged = filters.problem_tags(
+        # Divisions never count towards the tag penalty, which is what the
+        # fourth value reports.
+        tags, bantags, divisions, scored_as_tagged = filters.problem_tags(
             tags, exclude_tags, division, exclude_division, tags_cost_points=True)
 
         await self._validate_gitgud_status(ctx)
 
         problems = [prob for prob in cf_common.cache2.problem_cache.problems
                     if prob.rating >= srating and prob.rating <= erating
-                    and prob.name not in solved 
+                    and prob.name not in solved
                     and prob.name not in noguds
                     and prob.matches_all_tags(tags)
-                    and not prob.matches_any_tag(bantags)]
+                    and not prob.matches_any_tag(bantags)
+                    and (not divisions or prob.matches_any_tag(divisions))]
                         
 
         def check(problem):
