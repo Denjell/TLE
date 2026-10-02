@@ -243,10 +243,13 @@ helper (`cf_common.parse_tags`, the per-cog filter parsers) re-checked to
 confirm it receives a list of the same shape.
 
 **Eleven have since gone further** and take labelled options instead of an
-`args` field: comma separated `tags` / `exclude_tags` with autocomplete,
-`division` / `exclude_division` dropdowns, `Range` rating bounds, `after` /
-`before` dates, an autocompleted comma separated `types`, and `contests` /
-`indices` / `include_team` where the command had `c+` / `i+` / `+team`.
+`args` field: comma separated, autocompleted `tags` / `exclude_tags` and
+`division` / `exclude_division` (multi-select, same as the tag fields —
+`division` started as a single-choice dropdown and was generalized once
+multiple divisions turned out to be a real thing to want), `Range` rating
+bounds, `after` / `before` dates, an autocompleted comma separated `types`,
+and `contests` / `indices` / `include_team` where the command had `c+` / `i+`
+/ `+team`.
 
 `gitgud`, `gimme`, `stalk`, `vc`, `mashup`, `duel challenge`, `plot solved`,
 `plot curve`, `plot hist`, `plot scatter`, `plot speed`.

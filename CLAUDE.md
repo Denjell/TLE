@@ -99,14 +99,30 @@ them as removal candidates rather than a pattern to extend.
 
 Any command that takes Codeforces tags, a division, a rating range, a date
 range, submission types, or a `SubFilter` should build its options from here
-rather than re-declaring them: `Division`/`ProblemRating`/`SubmissionRating`
-types, `describe()` for the standard option descriptions, `tag_autocomplete`/
-`submission_type_autocomplete`, `split_tags`/`problem_tags`/`split_types`,
-`parse_date`/`date_range`, and `build_sub_filter()`. Division tags (`div1`…
-`edu`) are deliberately kept out of the free-text `tags` option — TLE writes
-them into `Problem.tags` itself when caching problemsets, so a plain tag
-filter would silently accept them, and for `/gitgud` specifically a tag costs
-200 points while the dedicated `division` option costs nothing.
+rather than re-declaring them: `ProblemRating`/`SubmissionRating` types,
+`describe()` for the standard option descriptions, `tag_autocomplete`/
+`division_autocomplete`/`submission_type_autocomplete`,
+`split_tags`/`split_divisions`/`problem_tags`/`split_types`,
+`parse_date`/`date_range`, and `build_sub_filter()`.
+
+`division`/`exclude_division` are comma separated, multi-select fields, the
+same interface `tags` has — `division_autocomplete` suggests the five
+division tags (`div1`…`edu`) and preserves what's already typed. They are
+kept apart from the free-text `tags` option deliberately: TLE writes division
+tags onto `Problem.tags` itself when caching problemsets, and for `/gitgud`
+specifically a real tag costs 200 points while `division` costs nothing, so a
+plain tag filter accepting them silently would be a loophole.
+
+`problem_tags()` returns divisions as a list separate from `tags`/`bantags`,
+not folded into either — a combined Div. 1 + Div. 2 round carries *both*
+division tags on its problems, so picking `div2, div3` has to mean "either",
+which `Problem.matches_all_tags` (what `tags` is ANDed with) cannot express.
+It's checked with `matches_any_tag` (OR) instead, both inline in the three
+commands that build their own problem filter (`gimme`, `mashup`, `gitgud`,
+plus `duel challenge`) and via `SubFilter.divisions`/`division_ok` in
+`filter_subs` for everything routed through `build_sub_filter()`.
+`exclude_division` has no such wrinkle — excluding already means "matches any
+of these" — so it folds straight into `bantags` alongside `exclude_tags`.
 
 ### Caching (`tle/util/cache_system2.py`, `tle/util/db/cache_db_conn.py`)
 
