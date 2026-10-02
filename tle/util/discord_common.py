@@ -4,6 +4,7 @@ import functools
 import random
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from tle.util import codeforces_api as cf
@@ -225,3 +226,33 @@ class TleHelp(commands.DefaultHelpCommand):
         mention = self.context.me.display_name if self.context else 'the bot'
         return (f'Type {prefix}{self.invoked_with} <command> for more info on a command.\n'
                 f'Run any command as /command, or by mentioning the bot: @{mention} command.')
+
+    def get_destination(self):
+        """Route help output through ctx.send instead of ctx.channel.send.
+
+        The base implementation returns self.context.channel, and send_pages/
+        send_error_message post straight to it. For a slash invocation that
+        never resolves the interaction (every slash call gets deferred by the
+        bot's before_invoke hook), so Discord shows 'thinking...' until it
+        times out into 'This interaction failed', even though the help text
+        did post. ctx.send already knows how to answer a deferred interaction
+        via its followup, so forward to it instead.
+        """
+        ctx = self.context
+
+        class _ContextDestination:
+            async def send(self, content=None, **kwargs):
+                await ctx.send(content, **kwargs)
+
+        return _ContextDestination()
+
+
+async def command_autocomplete(interaction, current: str):
+    """Suggest top-level and subcommand names for /help, e.g. 'duel challenge'."""
+    current = current.lower()
+    names = sorted({
+        command.qualified_name
+        for command in interaction.client.walk_commands()
+        if not command.hidden and current in command.qualified_name.lower()
+    })
+    return [app_commands.Choice(name=name, value=name) for name in names[:25]]
