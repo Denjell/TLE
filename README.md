@@ -82,8 +82,10 @@ apt-get install libjpeg-dev zlib1g-dev
 
 ### Final steps
 
-You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. Finally, go to the `Bot` settings in your App's Developer Portal (in the same page where you copied your Bot Token) and enable the `Server Members Intent`.
+You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. TLE needs none of the privileged intents, so there is nothing to enable on the `Bot` settings page of the Developer Portal.
 
+> :warning: TLE no longer requests the privileged `Server Members Intent` either (see [NoServerMembersIntent.md](NoServerMembersIntent.md)). Discord therefore no longer tells the bot when someone joins or leaves the server. Instead TLE checks once an hour which linked users are still members, so someone who left drops out of `/handle list` and the leaderboards, and someone who came back gets their rank role again, within an hour. An admin can run `/updatestatus` to check immediately.
+>
 > :warning: TLE no longer requests the privileged `Message Content Intent`, and leaving it enabled changes nothing. Because of that, Discord does not deliver the text of ordinary messages to the bot, so the `;` prefix only works when the message also mentions the bot (`@TLE gimme 1500`). Use the slash commands instead.
 >
 > :warning: When inviting the bot, the invite URL **must** include the `applications.commands` scope in addition to `bot` (i.e. `&scope=bot%20applications.commands`). Without it Discord will not show TLE's slash commands, no matter what the bot does. A bot invited before this change has to be re-invited with the extra scope; this does not kick it from the server or reset its roles.

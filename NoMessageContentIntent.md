@@ -4,7 +4,8 @@ Branch: `NoPrivilegedIntents` (branched from `master` @ `ed4d892`)
 
 This document covers **phase 1 only: the `MESSAGE CONTENT` privileged intent**.
 The `SERVER MEMBERS` intent is a separate phase and is deliberately out of scope
-here; see [Out of scope](#out-of-scope).
+here; see [Out of scope](#out-of-scope). It has since been done as phase 2, in
+[NoServerMembersIntent.md](NoServerMembersIntent.md).
 
 This plan is written against the code on `master`.
 
@@ -699,3 +700,8 @@ across `duel`, `handles`, `lockout`, `contests`, `training`, `graphs`, plus
 `on_member_join` / `on_member_remove`, which stop firing entirely. It also has a
 different shape of fix (REST fallbacks and periodic reconciliation rather than a
 command-surface rewrite). It gets its own plan once phase 1 lands.
+
+> **Update:** done as phase 2 on branch `NoServerPresenceIntent`. See
+> [NoServerMembersIntent.md](NoServerMembersIntent.md). In practice it needed no
+> REST fallbacks: batched gateway lookups by user id (`query_members`) work
+> without the intent.

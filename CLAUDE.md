@@ -57,6 +57,16 @@ delivers text content for messages that `@mention` the bot — meaning
 reflect this (signatures are rendered in slash form; logs reconstruct the
 invocation from parsed args since raw message content isn't available).
 
+The bot requests **no privileged intents** at all: the `Server Members`
+intent is off too (see `NoServerMembersIntent.md`). The member cache is
+therefore near-empty and member join/leave events never fire — don't use
+`guild.get_member()` as a membership test or `guild.members` as a member list.
+Use `discord_common.fetch_members`/`fetch_member` (batched gateway lookup by
+id), `fetch_member_or_user` for records that outlive membership (duels), or
+`discord_common.mention(id)` when only a mention is needed. Guild membership is
+the DB's `user_handle.active` flag, kept current by the hourly
+`Handles._reconcile_status` task (also `/updatestatus`).
+
 `tle/__main__.py` loads cogs by globbing `tle/cogs/*.py` **non-recursively**,
 so `tle/cogs/deactivated/*.py` (e.g. `cses.py`) is present in the tree but
 never loaded — that's how a cog gets "turned off" without deleting it.
