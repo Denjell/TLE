@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 if [[ -n "${VENV_DIR}" ]]; then
     echo "Activating virtual environment in ${VENV_DIR}."
-    python3 -m venv "${VENV_DIR}"
+    python -m venv "${VENV_DIR}"
     . "${VENV_DIR}/bin/activate"
 fi
 
