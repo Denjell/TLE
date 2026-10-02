@@ -40,13 +40,18 @@ class Logging(commands.Cog, logging.Handler):
                 break
             try:
                 msg = self.format(record)
-                # Not all errors will have message_contents or jump urls.
-                try:
-                    await channel.send(
-                        'Original Command: {}\nJump Url: {}'.format(
-                            record.message_content, record.jump_url))
-                except AttributeError:
-                    pass
+                # Not every record comes from a command invocation, and slash
+                # command invocations have no message to jump to, so report
+                # whichever of the two is present.
+                context_lines = []
+                invocation = getattr(record, 'invocation', None)
+                if invocation:
+                    context_lines.append(f'Original Command: {invocation}')
+                jump_url = getattr(record, 'jump_url', None)
+                if jump_url:
+                    context_lines.append(f'Jump Url: {jump_url}')
+                if context_lines:
+                    await channel.send('\n'.join(context_lines))
                 discord_msg_char_limit = 2000
                 char_limit = discord_msg_char_limit - 2 * len('```')
                 too_long = len(msg) > char_limit

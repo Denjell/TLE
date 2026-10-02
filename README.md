@@ -47,14 +47,15 @@ Now all dependencies need to be installed. TLE uses [Poetry](https://poetry.eust
 poetry install
 ```
 
-> :warning: **TLE requires Python 3.8 or later!**
+> :warning: **TLE requires Python 3.11 or later!**
 
-If you are using Ubuntu with older versions of python, then do the following:
+If your distribution's default python is older or newer than 3.11, install 3.11
+alongside it and use that interpreter:
 
 ```bash
-apt-get install python3.8-venv libpython3.8-dev
-python3.8 -m pip install poetry
-python3.8 -m poetry install
+apt-get install python3.11-venv libpython3.11-dev
+python3.11 -m pip install poetry
+python3.11 -m poetry install
 ```
 
 On some systems, Poetry is not able to install TLE's dependencies correctly. If you are unable to run `poetry install` without errors after completing the steps below, see the note at the end of the *final steps* section.
@@ -69,6 +70,10 @@ TLE also depends on cairo and pango for graphics and text rendering, which you n
 apt-get install libcairo2-dev libgirepository1.0-dev libpango1.0-dev pkg-config python3-dev gir1.2-pango-1.0
 ```
 
+> On distributions shipping GLib 2.80 or newer (Ubuntu 25.04+, for instance)
+> `libgirepository1.0-dev` no longer installs any headers, and PyGObject builds
+> against `girepository-2.0` instead. Install `libgirepository-2.0-dev` there.
+
 Additionally TLE uses pillow for graphics, which requires the following packages:
 
 ```bash
@@ -77,7 +82,11 @@ apt-get install libjpeg-dev zlib1g-dev
 
 ### Final steps
 
-You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. Finally, go to the `Bot` settings in your App's Developer Portal (in the same page where you copied your Bot Token) and enable the `Server Members Intent` and `Message Content Intent`.
+You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. Finally, go to the `Bot` settings in your App's Developer Portal (in the same page where you copied your Bot Token) and enable the `Server Members Intent`.
+
+> :warning: TLE no longer requests the privileged `Message Content Intent`, and leaving it enabled changes nothing. Because of that, Discord does not deliver the text of ordinary messages to the bot, so the `;` prefix only works when the message also mentions the bot (`@TLE gimme 1500`). Use the slash commands instead.
+>
+> :warning: When inviting the bot, the invite URL **must** include the `applications.commands` scope in addition to `bot` (i.e. `&scope=bot%20applications.commands`). Without it Discord will not show TLE's slash commands, no matter what the bot does. A bot invited before this change has to be re-invited with the extra scope; this does not kick it from the server or reset its roles.
 
 Create a new file `environment`.
 

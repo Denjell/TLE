@@ -6,12 +6,13 @@ import itertools
 import math
 import datetime
 
-from typing import List
+from typing import List, Literal, Optional
 
 import discord
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from discord import app_commands
 from discord.ext import commands
 from matplotlib import pyplot as plt
 from matplotlib import patches as patches
@@ -23,6 +24,7 @@ from tle import constants
 from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import filters
 from tle.util import graph_common as gc
 
 pd.plotting.register_matplotlib_converters()
@@ -223,7 +225,7 @@ class Graphs(commands.Cog):
         self.bot = bot
         self.converter = commands.MemberConverter()
 
-    @commands.group(brief='Graphs for analyzing Codeforces activity',
+    @commands.hybrid_group(brief='Graphs for analyzing Codeforces activity',
                     invoke_without_command=True)
     async def plot(self, ctx):
         """Plot various graphs. Wherever Codeforces handles are accepted it is possible to
@@ -231,14 +233,22 @@ class Graphs(commands.Cog):
         for name with spaces use "!name with spaces" (with quotes)."""
         await ctx.send_help('plot')
 
-    @plot.command(brief='Plot Codeforces rating graph', usage='[+zoom] [+number] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def rating(self, ctx, *args: str):
+    @plot.command(brief='Plot Codeforces rating graph')
+    @filters.describe('handles',
+                      zoom='Fit the vertical axis to the data instead of a fixed range.',
+                      number='Plot against contest number instead of date.',
+                      peak='Show only the contests that raised your peak rating.',
+                      after='Only contests rated on this date or later, as 2024 or 2024-03-01.',
+                      before='Only contests rated before this date, as 2024 or 2024-03-01.')
+    async def rating(self, ctx, handles: str = '',
+                     zoom: bool = False,
+                     number: bool = False,
+                     peak: bool = False,
+                     after: Optional[str] = None,
+                     before: Optional[str] = None):
         """Plots Codeforces rating graph for the handles provided."""
-
-        (zoom, number, peak), args = cf_common.filter_flags(args, ['+zoom' , '+number', '+peak'])
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+        filt = filters.build_sub_filter(after=after, before=before)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.rating(handle=handle) for handle in handles]
         resp = [filt.filter_rating_changes(rating_changes) for rating_changes in resp]
@@ -292,14 +302,20 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
 
-    @plot.command(brief='Plot Codeforces performance graph', aliases=['perf'], usage='[+zoom] [+peak] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def performance(self, ctx, *args: str):
+    @plot.command(brief='Plot Codeforces performance graph', aliases=['perf'])
+    @filters.describe('handles',
+                      zoom='Fit the vertical axis to the data instead of a fixed range.',
+                      peak='Show only the contests that raised your peak performance.',
+                      after='Only contests rated on this date or later, as 2024 or 2024-03-01.',
+                      before='Only contests rated before this date, as 2024 or 2024-03-01.')
+    async def performance(self, ctx, handles: str = '',
+                          zoom: bool = False,
+                          peak: bool = False,
+                          after: Optional[str] = None,
+                          before: Optional[str] = None):
         """Plots Codeforces performance graph for the handles provided."""
-
-        (zoom, peak), args = cf_common.filter_flags(args, ['+zoom' , '+peak'])
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+        filt = filters.build_sub_filter(after=after, before=before)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.rating(handle=handle) for handle in handles]
         # extract last rating before corrections
@@ -351,22 +367,30 @@ class Graphs(commands.Cog):
 
 
 
-    @plot.command(brief='Plot Codeforces extremes graph',
-                  usage='[handles] [+solved] [+unsolved] [+nolegend] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
-    async def extreme(self, ctx, *args: str):
+    @plot.command(brief='Plot Codeforces extremes graph')
+    @filters.describe('handle',
+                      solved='Plot the highest rated problem solved in each contest.',
+                      unsolved='Plot the lowest rated problem left unsolved in each contest.',
+                      legend='Show the legend.',
+                      after='Only contests rated on this date or later, as 2024 or 2024-03-01.',
+                      before='Only contests rated before this date, as 2024 or 2024-03-01.')
+    async def extreme(self, ctx, handle: str = '',
+                      solved: bool = True,
+                      unsolved: bool = True,
+                      legend: bool = True,
+                      after: Optional[str] = None,
+                      before: Optional[str] = None):
         """Plots pairs of lowest rated unsolved problem and highest rated solved problem for every
         contest that was rated for the given user.
         """
-        (solved, unsolved, nolegend), args = cf_common.filter_flags(args, ['+solved', '+unsolved', '+nolegend'])
-        legend, = cf_common.negate_flags(nolegend)
         if not solved and not unsolved:
-            solved = unsolved = True
-        
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
+            raise GraphCogError('Turning off both `solved` and `unsolved` leaves nothing to plot.')
+        filt = filters.build_sub_filter(after=after, before=before)
 
-        handles = args or ('!' + str(ctx.author),)
-        handle, = await cf_common.resolve_handles(ctx, self.converter, handles)
+        names = filters.split_words(handle) or ['!' + str(ctx.author)]
+        if len(names) > 1:
+            raise GraphCogError('Only one handle allowed.')
+        handle, = await cf_common.resolve_handles(ctx, self.converter, names)
         ratingchanges = await cf.user.rating(handle=handle)
         if not ratingchanges:
             raise GraphCogError(f'User {handle} is not rated')
@@ -395,14 +419,33 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief="Show histogram of solved problems' rating on CF",
-                  usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def solved(self, ctx, *args: str):
-        """Shows a histogram of solved problems' rating on Codeforces for the handles provided.
-        e.g. ;plot solved meooow +contest +virtual +outof +dp"""
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+    @plot.command(brief="Show histogram of solved problems' rating on CF")
+    @filters.describe('handles', *filters.SUB_FILTER_OPTIONS)
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def solved(self, ctx, handles: str = '',
+                     tags: str = '',
+                     exclude_tags: str = '',
+                     division: str = '',
+                     exclude_division: str = '',
+                     min_rating: Optional[filters.SubmissionRating] = None,
+                     max_rating: Optional[filters.SubmissionRating] = None,
+                     after: Optional[str] = None,
+                     before: Optional[str] = None,
+                     types: str = '',
+                     contests: str = '',
+                     indices: str = '',
+                     include_team: bool = False):
+        """Shows a histogram of solved problems' rating on Codeforces."""
+        filt = filters.build_sub_filter(
+            tags=tags, exclude_tags=exclude_tags, division=division,
+            exclude_division=exclude_division, min_rating=min_rating,
+            max_rating=max_rating, after=after, before=before, types=types,
+            contests=contests, indices=indices, include_team=include_team)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
@@ -447,25 +490,37 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Show histogram of solved problems on CF over time',
-                  usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [phase_days=] [c+marker..] [i+index..]')
-    async def hist(self, ctx, *args: str):
-        """Shows the histogram of problems solved on Codeforces over time for the handles provided"""
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        phase_days = 1
-        handles = []
-        for arg in args:
-            if arg[0:11] == 'phase_days=':
-                phase_days = int(arg[11:])
-            else:
-                handles.append(arg)
-
-        if phase_days < 1:
-            raise GraphCogError('Invalid parameters')
+    @plot.command(brief='Show histogram of solved problems on CF over time')
+    @filters.describe('handles', *filters.SUB_FILTER_OPTIONS,
+                      phase_days='Width of one bar, in days.')
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def hist(self, ctx, handles: str = '',
+                   tags: str = '',
+                   exclude_tags: str = '',
+                   division: str = '',
+                   exclude_division: str = '',
+                   min_rating: Optional[filters.SubmissionRating] = None,
+                   max_rating: Optional[filters.SubmissionRating] = None,
+                   after: Optional[str] = None,
+                   before: Optional[str] = None,
+                   types: str = '',
+                   contests: str = '',
+                   indices: str = '',
+                   include_team: bool = False,
+                   phase_days: app_commands.Range[int, 1, 3650] = 1):
+        """Shows the histogram of problems solved on Codeforces over time."""
+        filt = filters.build_sub_filter(
+            tags=tags, exclude_tags=exclude_tags, division=division,
+            exclude_division=exclude_division, min_rating=min_rating,
+            max_rating=max_rating, after=after, before=before, types=types,
+            contests=contests, indices=indices, include_team=include_team)
         phase_time = dt.timedelta(days=phase_days)
 
-        handles = handles or ['!' + str(ctx.author)]
+        handles = filters.split_words(handles) or ['!' + str(ctx.author)]
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
@@ -529,13 +584,33 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Plot count of solved CF problems over time',
-                  usage='[handles] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def curve(self, ctx, *args: str):
-        """Plots the count of problems solved over time on Codeforces for the handles provided."""
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+    @plot.command(brief='Plot count of solved CF problems over time')
+    @filters.describe('handles', *filters.SUB_FILTER_OPTIONS)
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def curve(self, ctx, handles: str = '',
+                    tags: str = '',
+                    exclude_tags: str = '',
+                    division: str = '',
+                    exclude_division: str = '',
+                    min_rating: Optional[filters.SubmissionRating] = None,
+                    max_rating: Optional[filters.SubmissionRating] = None,
+                    after: Optional[str] = None,
+                    before: Optional[str] = None,
+                    types: str = '',
+                    contests: str = '',
+                    indices: str = '',
+                    include_team: bool = False):
+        """Plots the count of problems solved over time on Codeforces."""
+        filt = filters.build_sub_filter(
+            tags=tags, exclude_tags=exclude_tags, division=division,
+            exclude_division=exclude_division, min_rating=min_rating,
+            max_rating=max_rating, after=after, before=before, types=types,
+            contests=contests, indices=indices, include_team=include_team)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]
@@ -566,31 +641,43 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Show history of problems solved by rating',
-                  aliases=['chilli'], usage='[handle] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [b=10] [s=3] [c+marker..] [i+index..] [+nolegend]')
-    async def scatter(self, ctx, *args):
+    @plot.command(brief='Show history of problems solved by rating', aliases=['chilli'])
+    @filters.describe('handle', *filters.SUB_FILTER_OPTIONS,
+                      bin_size='Window of the practice running average, in problems.',
+                      point_size='Size of each plotted point.',
+                      legend='Show the legend.')
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def scatter(self, ctx, handle: str = '',
+                      tags: str = '',
+                      exclude_tags: str = '',
+                      division: str = '',
+                      exclude_division: str = '',
+                      min_rating: Optional[filters.SubmissionRating] = None,
+                      max_rating: Optional[filters.SubmissionRating] = None,
+                      after: Optional[str] = None,
+                      before: Optional[str] = None,
+                      types: str = '',
+                      contests: str = '',
+                      indices: str = '',
+                      include_team: bool = False,
+                      bin_size: app_commands.Range[int, 1, 1000] = 10,
+                      point_size: app_commands.Range[int, 1, 100] = 3,
+                      legend: bool = True):
         """Plot Codeforces rating overlaid on a scatter plot of problems solved.
         Also plots a running average of ratings of problems solved in practice."""
-        (nolegend,), args = cf_common.filter_flags(args, ['+nolegend'])
-        legend, = cf_common.negate_flags(nolegend)
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
-        handle, bin_size, point_size = None, 10, 3
-        for arg in args:
-            if arg[0:2] == 'b=':
-                bin_size = int(arg[2:])
-            elif arg[0:2] == 's=':
-                point_size = int(arg[2:])
-            else:
-                if handle:
-                    raise GraphCogError('Only one handle allowed.')
-                handle = arg
-
-        if bin_size < 1 or point_size < 1 or point_size > 100:
-            raise GraphCogError('Invalid parameters')
-
-        handle = handle or '!' + str(ctx.author)
-        handle, = await cf_common.resolve_handles(ctx, self.converter, (handle,))
+        filt = filters.build_sub_filter(
+            tags=tags, exclude_tags=exclude_tags, division=division,
+            exclude_division=exclude_division, min_rating=min_rating,
+            max_rating=max_rating, after=after, before=before, types=types,
+            contests=contests, indices=indices, include_team=include_team)
+        names = filters.split_words(handle) or ['!' + str(ctx.author)]
+        if len(names) > 1:
+            raise GraphCogError('Only one handle allowed.')
+        handle, = await cf_common.resolve_handles(ctx, self.converter, names)
         rating_resp = [await cf.user.rating(handle=handle)]
         rating_resp = [filt.filter_rating_changes(rating_changes) for rating_changes in rating_resp]
         submissions = filt.filter_subs(await cf.user.status(handle=handle))
@@ -707,14 +794,13 @@ class Graphs(commands.Cog):
                                 title='Rating distribution of server members')
 
     @plot.command(brief='Show Codeforces rating distribution', usage='[normal/log] [active/all] [contest_cutoff=5]')
-    async def cfdistrib(self, ctx, mode: str = 'log', activity = 'active', contest_cutoff: int = 5):
+    async def cfdistrib(self, ctx, mode: Literal['log', 'normal'] = 'log',
+                        activity: Literal['active', 'all'] = 'active',
+                        contest_cutoff: int = 5):
         """Plots rating distribution of either active or all users on Codeforces, in either normal or log scale.
         Default mode is log, default activity is active (competed in last 90 days)
         Default contest cutoff is 5 (competed at least five times overall)
         """
-        if activity not in ['active', 'all']:
-            raise GraphCogError('Activity should be either `active` or `all`')
-
         time_cutoff = int(time.time()) - CONTEST_ACTIVE_TIME_CUTOFF if activity == 'active' else 0
         handles = cf_common.cache2.rating_changes_cache.get_users_with_more_than_n_contests(time_cutoff, contest_cutoff)
         if not handles:
@@ -728,10 +814,20 @@ class Graphs(commands.Cog):
                                 binsize=100,
                                 title=title)
 
-    @plot.command(brief='Show percentile distribution on codeforces', usage='[+zoom] [+nomarker] [handles...] [+exact]')
-    async def centile(self, ctx, *args: str):
-        """Show percentile distribution of codeforces and mark given handles in the plot. If +zoom and handles are given, it zooms to the neighborhood of the handles."""
-        (zoom, nomarker, exact), args = cf_common.filter_flags(args, ['+zoom', '+nomarker', '+exact'])
+    @plot.command(brief='Show percentile distribution on codeforces')
+    @filters.describe('handles',
+                      zoom='Zoom to the neighbourhood of the marked handles.',
+                      mark_handles='Mark the handles on the plot.',
+                      exact='Print the exact percentile beside each marked handle.')
+    async def centile(self, ctx, handles: str = '',
+                      zoom: bool = False,
+                      mark_handles: bool = True,
+                      exact: bool = False):
+        """Show the Codeforces percentile distribution, with the given handles marked.
+
+        With `zoom` and at least one handle, the plot zooms to the
+        neighbourhood of those handles.
+        """
         # Prepare data
         intervals = [(rank.low, rank.high) for rank in cf.RATED_RANKS]
         colors = [rank.color_graph for rank in cf.RATED_RANKS]
@@ -742,8 +838,8 @@ class Graphs(commands.Cog):
         perc = 100*np.arange(n)/n
 
         users_to_mark = {}
-        if not nomarker:
-            handles = args or ('!' + str(ctx.author),)
+        if mark_handles:
+            handles = filters.split_words(handles) or ('!' + str(ctx.author),)
             handles = await cf_common.resolve_handles(ctx,
                                                       self.converter,
                                                       handles,
@@ -843,10 +939,11 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
     @plot.command(brief='Plot histogram of gudgiting')
-    async def howgud(self, ctx, *members: discord.Member):
-        members = members or (ctx.author,)
-        if len(members) > 5:
-            raise GraphCogError('Please specify at most 5 gudgitters.')
+    async def howgud(self, ctx, member1: discord.Member = None, member2: discord.Member = None,
+                     member3: discord.Member = None, member4: discord.Member = None,
+                     member5: discord.Member = None):
+        members = [member for member in (member1, member2, member3, member4, member5)
+                   if member is not None] or [ctx.author]
 
         deltas = [[x[0] for x in cf_common.user_db.howgud(member.id)] for member in members]
         labels = [gc.StrWrap(f'{member.display_name}: {len(delta)}')
@@ -871,12 +968,13 @@ class Graphs(commands.Cog):
         await ctx.send(embed=embed, file=discord_file)
 
     @plot.command(brief='Plot distribution of server members by country')
-    async def country(self, ctx, *countries):
+    async def country(self, ctx, *, countries: str = ''):
         """Plots distribution of server members by countries. When no countries are specified, plots
          a bar graph of all members by country. When one or more countries are specified, plots a
          swarmplot of members by country and rating. Only members with registered handles and
          countries set on Codeforces are considered.
          """
+        countries = filters.split_words(countries)
         max_countries = 8
         if len(countries) > max_countries:
             raise GraphCogError(f'At most {max_countries} countries may be specified.')
@@ -942,18 +1040,20 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Show rating changes by rank', usage='contest_id [+server] [+zoom] [handles..]')
-    async def visualrank(self, ctx, contest_id: int, *args: str):
-        """Plot rating changes by rank. Add handles to specify a handle in the plot.
-        if arguments contains `+server`, it will include just server members and not all codeforces users.
-        Specify `+zoom` to zoom to the neighborhood of handles."""
-
-        args = set(args)
-        (in_server, zoom), handles = cf_common.filter_flags(args, ['+server', '+zoom'])
-        handles = await cf_common.resolve_handles(ctx, self.converter, handles, mincnt=0, maxcnt=20)
+    @plot.command(brief='Show rating changes by rank')
+    @filters.describe('handles',
+                      contest_id='Contest id, as shown by /contests.',
+                      server_only='Plot only server members instead of all of Codeforces.',
+                      zoom='Zoom to the neighbourhood of the given handles.')
+    async def visualrank(self, ctx, contest_id: int, handles: str = '',
+                         server_only: bool = False,
+                         zoom: bool = False):
+        """Plot rating changes by rank, marking the handles given."""
+        handles = await cf_common.resolve_handles(ctx, self.converter, filters.split_words(handles),
+                                                  mincnt=0, maxcnt=20)
 
         rating_changes = await cf.contest.ratingChanges(contest_id=contest_id)
-        if in_server:
+        if server_only:
             guild_handles = set(handle for discord_id, handle
                                 in cf_common.user_db.get_handles_for_guild(ctx.guild.id))
             rating_changes = [rating_change for rating_change in rating_changes
@@ -1032,25 +1132,42 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
 
-    @plot.command(brief='Show speed of solving problems by rating',
-                  usage='[handles...] [+contest] [+virtual] [+outof] [+scatter] [+median] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [s=3]')
-    async def speed(self, ctx, *args):
+    @plot.command(brief='Show speed of solving problems by rating')
+    @filters.describe('handles', *filters.SUB_FILTER_OPTIONS,
+                      add_scatter='Also plot every individual submission.',
+                      use_median='Plot the median time instead of the average.',
+                      point_size='Size of each scattered point.')
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def speed(self, ctx, handles: str = '',
+                    tags: str = '',
+                    exclude_tags: str = '',
+                    division: str = '',
+                    exclude_division: str = '',
+                    min_rating: Optional[filters.SubmissionRating] = None,
+                    max_rating: Optional[filters.SubmissionRating] = None,
+                    after: Optional[str] = None,
+                    before: Optional[str] = None,
+                    types: str = '',
+                    contests: str = '',
+                    indices: str = '',
+                    include_team: bool = False,
+                    add_scatter: bool = False,
+                    use_median: bool = False,
+                    point_size: app_commands.Range[int, 1, 100] = 3):
         """Plot time spent on problems of particular rating during contest."""
-
-        (add_scatter, use_median), args = cf_common.filter_flags(args, ['+scatter', '+median'])
-        filt = cf_common.SubFilter()
-        args = filt.parse(args)
+        filt = filters.build_sub_filter(
+            tags=tags, exclude_tags=exclude_tags, division=division,
+            exclude_division=exclude_division, min_rating=min_rating,
+            max_rating=max_rating, after=after, before=before, types=types,
+            contests=contests, indices=indices, include_team=include_team)
         if 'PRACTICE' in filt.types:
             filt.types.remove('PRACTICE')  # can't estimate time for practice submissions
 
-        handles, point_size = [], 3
-        for arg in args:
-            if arg[0:2] == 's=':
-                point_size = int(arg[2:])
-            else:
-                handles.append(arg)
-
-        handles = handles or ['!' + str(ctx.author)]
+        handles = filters.split_words(handles) or ['!' + str(ctx.author)]
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         all_solved_subs = [filt.filter_subs(submissions) for submissions in resp]

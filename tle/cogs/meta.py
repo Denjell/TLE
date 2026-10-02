@@ -3,10 +3,13 @@ import subprocess
 import sys
 import time
 import textwrap
+from typing import Optional
 
+from discord import app_commands
 from discord.ext import commands
 
 from tle import constants
+from tle.util import discord_common
 from tle.util.codeforces_common import pretty_time_format
 
 RESTART = 42
@@ -48,7 +51,23 @@ class Meta(commands.Cog):
         self.bot = bot
         self.start_time = time.time()
 
-    @commands.group(brief='Bot control', invoke_without_command=True)
+    @commands.hybrid_command(brief='Show help for TLE or one command')
+    @app_commands.describe(command='Command name, e.g. "gitgud" or "duel challenge". Leave empty to list everything.')
+    @app_commands.autocomplete(command=discord_common.command_autocomplete)
+    async def help(self, ctx, *, command: Optional[str] = None):
+        """Show help for TLE, or for one specific command."""
+        # Context.send_help is variadic (*args), not a single Optional
+        # parameter: send_help(None) passes a 1-tuple (None,), which takes
+        # the "specific entity" branch, finds entity is None, and silently
+        # returns without sending anything -- leaving a deferred interaction
+        # hanging forever. send_help() with zero args is what actually shows
+        # the full bot help listing.
+        if command:
+            await ctx.send_help(command)
+        else:
+            await ctx.send_help()
+
+    @commands.hybrid_group(brief='Bot control', invoke_without_command=True)
     async def meta(self, ctx):
         """Command the bot or get information about the bot."""
         await ctx.send_help(ctx.command)

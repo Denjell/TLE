@@ -4,6 +4,7 @@ import contextlib
 import logging
 import math
 import html
+from typing import Literal, Optional
 import cairo
 import gi
 import datetime
@@ -13,6 +14,7 @@ from gi.repository import Pango, PangoCairo
 
 import discord
 import random
+from discord import app_commands
 from discord.ext import commands
 
 from tle import constants
@@ -20,6 +22,7 @@ from tle.util import cache_system2
 from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import filters
 from tle.util import events
 from tle.util import paginator
 from tle.util import table
@@ -39,6 +42,11 @@ _PRETTY_HANDLES_PER_PAGE = 10
 _TOP_DELTAS_COUNT = 10
 _MAX_RATING_CHANGES_PER_EMBED = 15
 _UPDATE_HANDLE_STATUS_INTERVAL = 6 * 60 * 60  # 6 hours
+
+# The rating bands the gitgud ranklists can be narrowed to, named as the
+# option spells them. These are bands of current rating, not the division
+# tags a problem carries.
+_GitgudDivision = Literal['div1', 'div2', 'div3']
 
 _DIVISION_RATING_LOW  = (2100, 1600, -1000)
 _DIVISION_RATING_HIGH = (9999, 2099,  1599)
@@ -255,23 +263,11 @@ def _make_pages(users, title):
     return pages
 
 
-def parse_date(arg):
-    try:
-        if len(arg) == 6:
-            fmt = '%m%Y'
-        # elif len(arg) == 4:
-            # fmt = '%Y'
-        else:
-            raise ValueError
-        return datetime.datetime.strptime(arg, fmt)
-    except ValueError:
-        raise HandleCogError(f'{arg} is an invalid date argument')
-
 class Handles(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.font = ImageFont.truetype(constants.NOTO_SANS_CJK_BOLD_FONT_PATH, size=26) # font for ;handle pretty
+        self.font = ImageFont.truetype(constants.NOTO_SANS_CJK_BOLD_FONT_PATH, size=26) # font for /handle pretty
         self.converter = commands.MemberConverter()
 
     @commands.Cog.listener()
@@ -284,9 +280,10 @@ class Handles(commands.Cog):
     async def on_member_remove(self, member):
         cf_common.user_db.set_inactive([(member.guild.id, member.id)])
 
-    @commands.command(brief='update status, mark guild members as active')
+    @commands.hybrid_command(name='updatestatus', aliases=['_updatestatus'],
+                             brief='Update status, mark guild members as active')
     @commands.has_role(constants.TLE_ADMIN)
-    async def _updatestatus(self, ctx):
+    async def updatestatus(self, ctx):
         gid = ctx.guild.id
         active_ids = [m.id for m in ctx.guild.members]
         cf_common.user_db.reset_status(gid)
@@ -334,7 +331,7 @@ class Handles(commands.Cog):
                              return_exceptions=True)
         self.logger.info(f'All guilds updated for contest {contest.id}.')
 
-    @commands.group(brief='Commands that have to do with handles', invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands that have to do with handles', invoke_without_command=True)
     async def handle(self, ctx):
         """Change or collect information about specific handles on Codeforces"""
         await ctx.send_help(ctx.command)
@@ -514,30 +511,26 @@ class Handles(commands.Cog):
             lines += failed
         return discord_common.embed_success('\n'.join(lines))
 
-    @commands.command(brief="Show gudgitters", aliases=["gitgudders", "gitbadders", "gg"], usage="[div1|div2|div3] [+all]")
-    async def gudgitters(self, ctx, *args):
-        """Show the list of users of gitgud with their scores."""
+    @commands.hybrid_command(name="gitgudders", brief="Show the all-time gitgud ranklist",
+                             aliases=["gudgitters", "gitbadders", "gg"])
+    @app_commands.describe(
+        division='Only rank people whose current rating is in this division.',
+        show_all='Include people who have left the server.')
+    async def gitgudders(self, ctx,
+                         division: Optional[_GitgudDivision] = None,
+                         show_all: bool = False):
+        """Show the all-time gitgud ranklist."""
         res = cf_common.user_db.get_gudgitters()
         res.sort(key=lambda r: r[1], reverse=True)
-        
-        division = None
-        showall = False
-        for arg in args:
-            if arg[0:3] == 'div':
-                try:
-                    division = int(arg[3])
-                    if division < 1 or division > 3: 
-                        raise HandleCogError('Division number must be within range [1-3]')
-                except ValueError:
-                    raise HandleCogError(f'{arg} is an invalid div argument')
-            if arg == "+all":
-                showall = True
+
+        # 'div1' is the top band; the rating tables are indexed from zero.
+        band = None if division is None else int(division[3]) - 1
 
         rankings = []
         index = 0
         for user_id, score in res:
             member = ctx.guild.get_member(int(user_id))
-            if not showall and member is None:
+            if not show_all and member is None:
                 continue
             if score > 0:
                 handle = cf_common.user_db.get_handle(user_id, ctx.guild.id)
@@ -551,9 +544,9 @@ class Handles(commands.Cog):
                     discord_handle = member.display_name
                 
                 
-                if division is not None:
+                if band is not None:
                     if rating is None: continue;
-                    if rating < _DIVISION_RATING_LOW[division-1] or rating > _DIVISION_RATING_HIGH[division-1]:
+                    if rating < _DIVISION_RATING_LOW[band] or rating > _DIVISION_RATING_HIGH[band]:
                         continue
                 
                 rankings.append((index, discord_handle, handle, rating, score))
@@ -562,7 +555,7 @@ class Handles(commands.Cog):
                 break
 
         if not rankings:
-            raise HandleCogError('No one has completed a gitgud challenge, send ;gitgud to request and ;gotgud to mark it as complete')
+            raise HandleCogError('No one has completed a gitgud challenge, send /gitgud to request and /gotgud to mark it as complete')
         discord_file = get_gudgitters_image(rankings)
         await ctx.send(file=discord_file)
 
@@ -571,15 +564,20 @@ class Handles(commands.Cog):
                     if self.dlo <= change.ratingUpdateTimeSeconds < self.dhi]
         return rating_changes
 
-    @commands.command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def monthlygudgitters(self, ctx, *args):
-        """Show the list of users of gitgud with their scores."""
-        
-        # Calculate time range of given month (d=) or current month
+    @commands.hybrid_command(name="monthlygitgudders", brief="Show the monthly gitgud ranklist",
+                             aliases=["monthlygudgitters", "monthlygg", "monthlygitbadders", "mgg"])
+    @app_commands.describe(
+        month='Month to rank, as 2024-03. The current month by default.',
+        division='Only rank people whose rating was in this division that month.',
+        show_all='Include people who have left the server.')
+    async def monthlygitgudders(self, ctx,
+                                month: Optional[str] = None,
+                                division: Optional[_GitgudDivision] = None,
+                                show_all: bool = False):
+        """Show the gitgud ranklist for one month."""
         now = datetime.datetime.now()
-        for arg in args:
-            if arg[0:2] == 'd=':
-                now = parse_date(arg[2:])
+        if month is not None:
+            now = datetime.datetime.fromtimestamp(filters.parse_month(month, 'month'))
 
         start_time, end_time = cf_common.get_start_and_end_of_month(now)
         
@@ -589,19 +587,9 @@ class Handles(commands.Cog):
         if start_time >= cfc._GITGUD_MORE_POINTS_START_TIME: 
             morePointsActive = True
 
-        division = None
-        showall = False
-        for arg in args:
-            if arg[0:3] == 'div':
-                try:
-                    division = int(arg[3])
-                    if division < 1 or division > 3: 
-                        raise HandleCogError('Division number must be within range [1-3]')
-                except ValueError:
-                    raise HandleCogError(f'{arg} is an invalid div argument')
-            if arg == "+all":
-                showall = True                    
-       
+        # 'div1' is the top band; the rating tables are indexed from zero.
+        band = None if division is None else int(division[3]) - 1
+
         # get gitgud of month and calculate scores
         results = cf_common.user_db.get_gudgitters_timerange(start_time, end_time)
         res = {}
@@ -620,7 +608,7 @@ class Handles(commands.Cog):
         cache = cf_common.cache2.rating_changes_cache
         for user_id, score in sorted(res.items(), key=lambda item: item[1], reverse=True):
             member = ctx.guild.get_member(int(user_id))
-            if not showall and member is None:
+            if not show_all and member is None:
                 continue
             if score > 0:
                 handle = cf_common.user_db.get_handle(user_id, ctx.guild.id)
@@ -641,8 +629,8 @@ class Handles(commands.Cog):
                 if len(rating_changes) < 1: 
                     continue
                 if rating_changes[-1] is None: continue
-                if division is not None:
-                    if rating_changes[-1].newRating < _DIVISION_RATING_LOW[division-1] or rating_changes[-1].newRating > _DIVISION_RATING_HIGH[division-1]:
+                if band is not None:
+                    if rating_changes[-1].newRating < _DIVISION_RATING_LOW[band] or rating_changes[-1].newRating > _DIVISION_RATING_HIGH[band]:
                         continue
                 rating = rating_changes[-1].newRating
                 rankings.append((index, discord_handle, handle, rating, score))
@@ -651,18 +639,18 @@ class Handles(commands.Cog):
                 break
 
         if not rankings:
-            raise HandleCogError('No one has completed a gitgud challenge, send ;gitgud to request and ;gotgud to mark it as complete')
+            raise HandleCogError('No one has completed a gitgud challenge, send /gitgud to request and /gotgud to mark it as complete')
         discord_file = get_gudgitters_image(rankings)
         await ctx.send(file=discord_file)
 
     @handle.command(brief="Show all handles")
-    async def list(self, ctx, *countries):
+    async def list(self, ctx, *, countries: str = ''):
         """Shows members of the server who have registered their handles and
         their Codeforces ratings. You can additionally specify a list of countries
         if you wish to display only members from those countries. Country data is
-        sourced from codeforces profiles. e.g. ;handle list Croatia Slovenia
+        sourced from codeforces profiles. e.g. /handle list Croatia Slovenia "United States"
         """
-        countries = [country.title() for country in countries]
+        countries = [country.title() for country in filters.split_words(countries)]
         res = cf_common.user_db.get_cf_users_for_guild(ctx.guild.id)
         users = [(ctx.guild.get_member(user_id), cf_user.handle, cf_user.rating)
                  for user_id, cf_user in res if not countries or cf_user.country in countries]
@@ -676,7 +664,7 @@ class Handles(commands.Cog):
             title += ' from ' + ', '.join(f'`{country}`' for country in countries)
         pages = _make_pages(users, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, ctx=ctx)
 
     @handle.command(brief="Show handles, but prettier")
     async def pretty(self, ctx, page_no: int = None):
@@ -831,8 +819,8 @@ class Handles(commands.Cog):
 
         return embeds
 
-    @commands.group(brief='Commands for role updates',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Commands for role updates',
+                           invoke_without_command=True)
     async def roleupdate(self, ctx):
         """Group for commands involving role updates."""
         await ctx.send_help(ctx.command)
@@ -847,48 +835,47 @@ class Handles(commands.Cog):
     @roleupdate.command(brief='Enable or disable auto role updates',
                         usage='on|off')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def auto(self, ctx, arg):
+    async def auto(self, ctx, setting: Literal['on', 'off']):
         """Auto role update refers to automatic updating of rank roles when rating
         changes are released on Codeforces. 'on'/'off' disables or enables auto role
         updates.
         """
-        if arg == 'on':
+        if setting == 'on':
             rc = cf_common.user_db.enable_auto_role_update(ctx.guild.id)
             if not rc:
                 raise HandleCogError('Auto role update is already enabled.')
             await ctx.send(embed=discord_common.embed_success('Auto role updates enabled.'))
-        elif arg == 'off':
+        else:
             rc = cf_common.user_db.disable_auto_role_update(ctx.guild.id)
             if not rc:
                 raise HandleCogError('Auto role update is already disabled.')
             await ctx.send(embed=discord_common.embed_success('Auto role updates disabled.'))
-        else:
-            raise ValueError(f"arg must be 'on' or 'off', got '{arg}' instead.")
 
     @roleupdate.command(brief='Publish a rank update for the given contest',
                         usage='here|off|contest_id')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def publish(self, ctx, arg):
+    async def publish(self, ctx, target: str):
         """This is a feature to publish a summary of rank changes and top rating
         increases in a particular contest for members of this server. 'here' will
         automatically publish the summary to this channel whenever rating changes on
         Codeforces are released. 'off' will disable auto publishing. Specifying a
         contest id will publish the summary immediately.
         """
-        if arg == 'here':
+        if target == 'here':
             cf_common.user_db.set_rankup_channel(ctx.guild.id, ctx.channel.id)
             await ctx.send(
                 embed=discord_common.embed_success('Auto rank update publishing enabled.'))
-        elif arg == 'off':
+        elif target == 'off':
             rc = cf_common.user_db.clear_rankup_channel(ctx.guild.id)
             if not rc:
                 raise HandleCogError('Rank update publishing is already disabled.')
             await ctx.send(embed=discord_common.embed_success('Rank update publishing disabled.'))
         else:
             try:
-                contest_id = int(arg)
+                contest_id = int(target)
             except ValueError:
-                raise ValueError(f"arg must be 'here', 'off' or a contest ID, got '{arg}' instead.")
+                raise HandleCogError(
+                    f"Expected 'here', 'off' or a contest ID, got '{target}' instead.")
             await self._publish_now(ctx, contest_id)
 
     async def _publish_now(self, ctx, contest_id):
@@ -908,8 +895,11 @@ class Handles(commands.Cog):
 
         change_by_handle = {change.handle: change for change in changes}
         rankup_embeds = self._make_rankup_embeds(ctx.guild, contest, change_by_handle)
+        # Through ctx rather than the channel: for a slash invocation that is
+        # what answers the deferred interaction, which would otherwise sit on
+        # 'thinking...' beside the embeds until it timed out.
         for rankup_embed in rankup_embeds:
-            await ctx.channel.send(embed=rankup_embed)
+            await ctx.send(embed=rankup_embed)
 
     async def _generic_remind(self, ctx, action, role_name, what):
         roles = [role for role in ctx.guild.roles if role.name == role_name]
@@ -931,10 +921,10 @@ class Handles(commands.Cog):
         else:
             raise HandleCogError(f'Invalid action {action}')
 
-    @commands.command(brief='Grants or removes the specified pingable role',
+    @commands.hybrid_command(brief='Grants or removes the specified pingable role',
                       usage='[give/remove] [vc/duel]')
     async def role(self, ctx, action: str, which: str):
-        """e.g. ;role remove duel"""
+        """e.g. /role remove duel"""
         if which == 'vc':
             await self._generic_remind(ctx, action, 'Virtual Contestant', 'vc')
         elif which == 'duel':
@@ -942,7 +932,8 @@ class Handles(commands.Cog):
         else:
             raise HandleCogError(f'Invalid role {which}')
 
-    @discord_common.send_error_if(HandleCogError, cf_common.HandleIsVjudgeError)
+    @discord_common.send_error_if(HandleCogError, cf_common.HandleIsVjudgeError,
+                                  cf_common.FilterError)
     async def cog_command_error(self, ctx, error):
         pass
 

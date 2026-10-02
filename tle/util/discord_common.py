@@ -4,6 +4,7 @@ import functools
 import random
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from tle.util import codeforces_api as cf
@@ -69,6 +70,30 @@ def send_error_if(*error_cls):
     return decorator
 
 
+def describe_invocation(ctx):
+    """Rebuild a readable form of the command that was invoked.
+
+    ctx.message.content is empty without the Message Content intent, and for a
+    slash command discord.py synthesises a message that never had content at
+    all, so the raw text a user typed is simply not available any more. The
+    parsed command and its arguments are, and they are what a log reader
+    actually wants.
+    """
+    if ctx.command is None:
+        return '<unknown command>'
+    # clean_prefix resolves a mention prefix to '@Bot ', which is what a prefix
+    # invocation actually looks like now that ';' only fires on a mention.
+    prefix = '/' if ctx.interaction is not None else ctx.clean_prefix
+    # ctx.args is [cog, ctx, *positional] for a cog command and [ctx,
+    # *positional] otherwise. ctx.kwargs holds the keyword-only parameters.
+    positional = ctx.args[2:] if ctx.cog is not None else ctx.args[1:]
+    parts = [f'{prefix}{ctx.command.qualified_name}']
+    parts += [str(arg) for arg in positional]
+    parts += [f'{name}={value}' for name, value in ctx.kwargs.items()
+              if value is not None]
+    return ' '.join(parts)
+
+
 async def bot_error_handler(ctx, exception):
     if getattr(exception, 'handled', False):
         # Errors already handled in cogs should have .handled = True
@@ -82,13 +107,25 @@ async def bot_error_handler(ctx, exception):
         await ctx.send(embed=embed_alert('Sorry, this command is temporarily disabled'))
     elif isinstance(exception, (cf.CodeforcesApiError, commands.UserInputError)):
         await ctx.send(embed=embed_alert(exception))
+    elif isinstance(exception, commands.CheckFailure):
+        # Mostly MissingRole/MissingAnyRole. Slash commands are listed for
+        # everyone regardless of the roles they require, so an ordinary user
+        # running into this is now routine rather than a sign of something
+        # wrong, and it must not be logged as an exception.
+        #
+        # It also has to produce a visible reply: checks run before the
+        # before_invoke hook that defers interactions, so nothing has
+        # acknowledged the interaction at this point and staying silent shows
+        # up to the user as 'the application did not respond'.
+        await ctx.send(embed=embed_alert('You are not allowed to use this command.'))
     else:
         msg = 'Ignoring exception in command {}:'.format(ctx.command)
         exc_info = type(exception), exception, exception.__traceback__
-        extra = {
-            "message_content": ctx.message.content,
-            "jump_url": ctx.message.jump_url
-        }
+        extra = {"invocation": describe_invocation(ctx)}
+        if ctx.interaction is None:
+            # A slash command has no real message to jump to; discord.py's
+            # synthetic one would produce a dead link.
+            extra["jump_url"] = ctx.message.jump_url
         logger.exception(msg, exc_info=exc_info, extra=extra)
 
 
@@ -140,25 +177,41 @@ async def presence(bot):
     presence_task.start()
 
 class TleHelp(commands.DefaultHelpCommand):
+    """Help formatter for a bot whose commands are slash commands.
+
+    Every command is registered as an application command, while the ';' prefix
+    only fires on a message that also mentions the bot. Rendering ';duel
+    challenge' would therefore tell the reader to type something that does
+    nothing, so signatures are shown in their slash form.
+    """
+
+    def _slash_signature(self, command):
+        signature = f'/{command.qualified_name}'
+        if command.usage:
+            signature += f' {command.usage}'
+        elif command.signature:
+            signature += f' {command.signature}'
+        return signature
+
+    def get_command_signature(self, command):
+        return self._slash_signature(command)
+
     def add_command_formatting(self, command):
-        """A utility function to format the non-indented block of commands and groups.
-
-        Parameters
-        ------------
-        command: :class:`Command`
-            The command to format.
-        """
-
+        """Format the non-indented block of a command or group."""
         if command.description:
             self.paginator.add_line(command.description, empty=True)
 
-        signature = _BOT_PREFIX + command.qualified_name
-        if len(command.aliases) > 0:
-            aliases = '|'.join(command.aliases)
-            signature += '|'+aliases
-        if command.usage:
-            signature += " "+command.usage
-        self.paginator.add_line(signature, empty=True)
+        self.paginator.add_line(self._slash_signature(command), empty=True)
+
+        # Aliases are an ext.commands feature; application commands have no
+        # equivalent, so these only work when mentioning the bot. Listing them
+        # inside the slash signature would be misleading.
+        if command.aliases:
+            mention = self.context.me.display_name if self.context else 'the bot'
+            self.paginator.add_line(
+                f'Aliases (only when mentioning @{mention}): '
+                + ', '.join(command.aliases),
+                empty=True)
 
         if command.help:
             try:
@@ -168,3 +221,46 @@ class TleHelp(commands.DefaultHelpCommand):
                     self.paginator.add_line(line)
                 self.paginator.add_line()
 
+    def get_ending_note(self):
+        prefix = self.context.clean_prefix if self.context else ''
+        mention = self.context.me.display_name if self.context else 'the bot'
+        return (f'Type {prefix}{self.invoked_with} <command> for more info on a command.\n'
+                f'Run any command as /command, or by mentioning the bot: @{mention} command.')
+
+    def get_destination(self):
+        """Route help output through ctx.send instead of ctx.channel.send.
+
+        The base implementation returns self.context.channel, and send_pages/
+        send_error_message post straight to it. For a slash invocation that
+        never resolves the interaction (every slash call gets deferred by the
+        bot's before_invoke hook), so Discord shows 'thinking...' until it
+        times out into 'This interaction failed', even though the help text
+        did post. ctx.send already knows how to answer a deferred interaction
+        via its followup, so forward to it instead.
+        """
+        ctx = self.context
+
+        class _ContextDestination:
+            async def send(self, content=None, **kwargs):
+                await ctx.send(content, **kwargs)
+
+        return _ContextDestination()
+
+
+async def command_autocomplete(interaction, current: str):
+    """Suggest top-level and subcommand names for /help, e.g. 'duel challenge'.
+
+    Discord allows at most 25 suggestions, well under the ~115 commands and
+    subcommands TLE has, so an unfiltered list can't show everything anyway.
+    With nothing typed yet, show just the top-level commands (no space in the
+    name) as an overview of what's available; once the user starts typing,
+    search across subcommands too so 'chal' still finds 'duel challenge'.
+    """
+    current = current.lower()
+    all_names = {command.qualified_name for command in interaction.client.walk_commands()
+                 if not command.hidden}
+    if current:
+        names = sorted(name for name in all_names if current in name.lower())
+    else:
+        names = sorted(name for name in all_names if ' ' not in name)
+    return [app_commands.Choice(name=name, value=name) for name in names[:25]]

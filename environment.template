@@ -1,6 +1,11 @@
 export BOT_TOKEN="XXXXXXXXXXXXXXXXXXXXXXXX.XXXXXX.XXXXXXXXXXXXXXXXXXXXXXXXXXX"
 export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 
+# Optional. Set to a guild id to register slash commands in that guild only,
+# where they appear immediately. Leave unset in production to register them
+# globally, which can take up to an hour to propagate.
+export SLASH_COMMAND_GUILD_ID=""
+
 # Set to enable automatic venv usage.
 export VENV_DIR=""
 

@@ -1,6 +1,9 @@
 import random
 from enum import IntEnum
+from typing import Literal
+
 import discord
+from discord import app_commands
 from discord.ext import commands
 import datetime
 
@@ -28,7 +31,6 @@ FONTS = [
     'Noto Sans CJK KR',
 ]
 
-
 _TRAINING_MIN_RATING_VALUE = 800
 _TRAINING_MAX_RATING_VALUE = 3500
 
@@ -40,6 +42,16 @@ class TrainingMode(IntEnum):
     TIMED30 = 3
     TIMED60 = 4
     TIMED1 = 5
+
+
+# The game modes, under the names the mode option offers.
+_TRAINING_MODES = {
+    'infinite': TrainingMode.NORMAL,
+    'survival': TrainingMode.SURVIVAL,
+    'timed15': TrainingMode.TIMED15,
+    'timed30': TrainingMode.TIMED30,
+    'timed60': TrainingMode.TIMED60,
+}
 
 
 class TrainingResult(IntEnum):
@@ -266,12 +278,12 @@ class Training(commands.Cog):
         self.bot = bot
         self.converter = commands.MemberConverter()
 
-    @commands.group(brief='Training commands',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Training commands',
+                           invoke_without_command=True)
     async def training(self, ctx):
         """ A training is a game played against the bot. In this game the bot will assign you a codeforces problem that you should solve. If you manage to solve the problem the bot will assign you a harder problem. If you need to skip the problem the bot will lower the difficulty.
-            You can start a game by using the ;training start command. The bot will assign you a codeforces problem that you should solve. If you manage to solve the problem you can do ;training solved and the bot will assign you a problem that is 100 points higher rated. If you need editorial / external help or have no idea how to solve it you can do ;training skip. The bot will reduce the difficulty of the next problem by 100 points.
-            You may end your training at any time with ;training end
+            You can start a game by using the /training start command. The bot will assign you a codeforces problem that you should solve. If you manage to solve the problem you can do /training solved and the bot will assign you a problem that is 100 points higher rated. If you need editorial / external help or have no idea how to solve it you can do /training skip. The bot will reduce the difficulty of the next problem by 100 points.
+            You may end your training at any time with /training end
             The game is available in the following modes: 
             - infinite: Try to get as high as possible. You are allowed to skip any number of times. 
             - survival: Seeking for some thrill? In this mode you only have 3 lives (you can skip 3 problems). How far will you get?
@@ -279,7 +291,7 @@ class Training(commands.Cog):
                           If you need to skip a problem or if you are too slow at solving the problem you will lose one of your 3 lives.
                           Available difficulty levels: timed15 (15 minutes for each problem), timed30 (30 minutes), timed60 (60 minutes)
                           You get some bonus time if you manage to solve a problem within the time limit.
-            For further help on usage of a command do ;help training <command> (e.g. ;help training start)        
+            For further help on a command, mention the bot: @TLE help training <command>        
         """
         await ctx.send_help(ctx.command)
 
@@ -297,30 +309,6 @@ class Training(commands.Cog):
     async def _getLatestTraining(self, user_id):
         latest = cf_common.user_db.get_latest_training(user_id)
         return latest
-
-    def _extractArgs(self, args):
-        mode = TrainingMode.NORMAL
-        rating = 800
-        unrecognizedArgs = []
-        for arg in args:
-            if arg.isdigit():
-                rating = int(arg)
-            elif arg == "infinite" or arg == "+infinite":
-                mode = TrainingMode.NORMAL
-            elif arg == "survival" or arg == "+survival":
-                mode = TrainingMode.SURVIVAL
-            elif arg == "timed15" or arg == "+timed15":
-                mode = TrainingMode.TIMED15
-            elif arg == "timed30" or arg == "+timed30":
-                mode = TrainingMode.TIMED30
-            elif arg == "timed60" or arg == "+timed60":
-                mode = TrainingMode.TIMED60
-            else:
-                unrecognizedArgs.append(arg)
-        if len(unrecognizedArgs) > 0:
-            raise TrainingCogError(
-                'Unrecognized arguments: {}'.format(' '.join(unrecognizedArgs)))
-        return rating, mode
 
     def _getStatus(self, success):
         if success == TrainingResult.SOLVED:
@@ -358,7 +346,7 @@ class Training(commands.Cog):
     def _checkTrainingActive(self, ctx, active):
         if not active:
             raise TrainingCogError(
-                'You do not have an active training. You can start one with ;training start')
+                'You do not have an active training. You can start one with /training start')
 
     async def _pickTrainingProblem(self, handle, rating, submissions, user_id):
         solved = {sub.problem.name for sub in submissions}
@@ -536,17 +524,23 @@ class Training(commands.Cog):
 
     # User commands start here
 
-    @training.command(brief='Start a training session',
-                      usage='[rating] [infinite|survival|timed15|timed30|timed60]')
+    @training.command(brief='Start a training session')
+    @app_commands.describe(
+        rating='Rating to start at, a multiple of 100 from 800 to 3500.',
+        mode='How the session ends. Infinite by default.')
     @cf_common.user_guard(group='training')
-    async def start(self, ctx, *args):
-        """ Start your training session
-            - Game modes:
-              - infinite: Play the game in infinite mode (you can skip at any time) [DEFAULT]
-              - survival: Challenge mode with only 3 skips available
-              - timed15/timed30/timed60: Challenge mode similar to survival but u only have a limited time to solve your problem. 
-                                         Slow solves will also reduce your life by 1. Fast solves will increase available time for the next problem.
-            - It is possible to change the start rating from 800 to any other valid rating
+    async def start(self, ctx,
+                    rating: app_commands.Range[int, _TRAINING_MIN_RATING_VALUE,
+                                               _TRAINING_MAX_RATING_VALUE] = 800,
+                    mode: Literal['infinite', 'survival', 'timed15',
+                                  'timed30', 'timed60'] = 'infinite'):
+        """Start a training session.
+
+        Game modes:
+          - infinite: skip whenever you like, the session never ends
+          - survival: three skips, then it is over
+          - timed15 / timed30 / timed60: survival with a clock as well. A slow
+            solve costs a life, a fast one buys time for the next problem.
         """
         # check if we are in the correct channel
         self._checkIfCorrectChannel(ctx)
@@ -556,9 +550,7 @@ class Training(commands.Cog):
         # get user submissions
         submissions = await cf.user.status(handle=handle)
 
-        rating, mode = self._extractArgs(args)
-
-        gamestate = Game(mode)
+        gamestate = Game(_TRAINING_MODES[mode])
 
         # check if start of a new training is possible
         active = await self._getActiveTraining(ctx.author.id)
@@ -572,7 +564,7 @@ class Training(commands.Cog):
 
     @training.command(brief='If you have solved your current problem it will assign a new one')
     @cf_common.user_guard(group='training')
-    async def solved(self, ctx, *args):
+    async def solved(self, ctx):
         """ Use this command if you got AC on the training problem. If game continues the bot will assign a new problem.
         """
 
@@ -699,7 +691,7 @@ class Training(commands.Cog):
             await self._postTrainingStatistics(ctx, latest, handle, gamestate, False, True)
 
     @training.command(brief="Show fastest training solves")
-    async def fastest(self, ctx, *args):
+    async def fastest(self, ctx):
         """Show a list of fastest solves within a training session for each rating."""
         res = cf_common.user_db.train_get_fastest_solves()
         

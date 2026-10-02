@@ -1,12 +1,12 @@
 import datetime
 import random
-from typing import List
+from typing import List, Literal, Optional
 import math
-import time
 from collections import defaultdict
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 
@@ -17,6 +17,26 @@ from tle.util import discord_common
 from tle.util.db.user_db_conn import Gitgud
 from tle.util import paginator
 from tle.util import cache_system2
+from tle.util import filters
+
+
+# Contest name patterns worth offering for /vc. vc matches any substring of a
+# contest name, so this is a shortlist rather than a closed set; each of these
+# matches contests in the cache today.
+_VC_PATTERNS = ('div1', 'div2', 'div3', 'div4', 'educational', 'global',
+                'icpc', 'technocup', 'kotlin', 'hello', 'goodbye',
+                'april fools', 'vk cup', 'bubble cup', 'codeton')
+
+
+async def _contest_pattern_autocomplete(interaction, current: str):
+    """Suggest contest name patterns for /vc.
+
+    Not a closed set: vc matches any substring of a contest name, so a pattern
+    typed by hand works just as well. Deriving the list from the contest cache
+    was tried and buries the real series names under words like 'rules',
+    'teams' and 'day'.
+    """
+    return filters.complete_list_field(current, _VC_PATTERNS)
 
 
 _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
@@ -92,18 +112,18 @@ class Codeforces(commands.Cog):
         embed.add_field(name='Monthly points', value=monthlyPointsStr)
         await ctx.send(f'Challenge problem for `{handle}`', embed=embed)
 
-    @commands.command(brief='Upsolve a problem')
+    @commands.hybrid_command(brief='Upsolve a problem')
     @cf_common.user_guard(group='gitgud')
     async def upsolve(self, ctx, choice: int = -1):
-        """Upsolve: The command ;upsolve lists all problems that you haven't solved in contests you participated 
-        - Type ;upsolve for listing all available problems.
-        - Type ;upsolve <nr> for choosing the problem <nr> as gitgud problem (only possible if you have no active gitgud challenge)
-        - After solving the problem you can claim gitgud points for it with ;gotgud
-        - If you can't solve the problem or used external help you should skip it with ;nogud (Available after 2 hours)
-        - The all-time ranklist can be found with ;gitgudders
-        - A monthly ranklist is shown when you type ;monthlygitgudders
-        - Another way to gather gitgud points is ;gitgud (only works if you have no active gitgud-Challenge)
-        - For help with each of the commands you can type ;help <command> (e.g. ;help gitgudders)
+        """Upsolve: The command /upsolve lists all problems that you haven't solved in contests you participated 
+        - Type /upsolve for listing all available problems.
+        - Type /upsolve <nr> for choosing the problem <nr> as gitgud problem (only possible if you have no active gitgud challenge)
+        - After solving the problem you can claim gitgud points for it with /gotgud
+        - If you can't solve the problem or used external help you should skip it with /nogud (Available after 2 hours)
+        - The all-time ranklist can be found with /gitgudders
+        - A monthly ranklist is shown when you type /monthlygitgudders
+        - Another way to gather gitgud points is /gitgud (only works if you have no active gitgud-Challenge)
+        - For help with each of the commands, mention the bot: @TLE help <command> (e.g. help gitgudders)
         
         Point distribution:
         delta  | <-300| -300 | -200 | -100 |  0  |  100 |  200 |>=300
@@ -144,28 +164,55 @@ class Codeforces(commands.Cog):
                 return title, embed
                   
             pages = [make_page(chunk, pi, len(problems)) for pi, chunk in enumerate(paginator.chunkify(problems, 10))]
-            paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)   
+            paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)   
 
-    @commands.command(brief='Recommend a problem',
-                      usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    @commands.hybrid_command(brief='Recommend a problem')
+    @app_commands.describe(
+        rating='Problem rating, 800-3500. Defaults to your own rating.',
+        max_rating='Upper bound of a rating range. The rating is then hidden.',
+        tags='Only problems with these tags, comma separated.',
+        exclude_tags='Never recommend problems with these tags, comma separated.',
+        division='Only problems from these divisions, comma separated.',
+        exclude_division='Never recommend problems from these divisions, comma separated.',
+        after='Only contests from this date on, as 2024, 2024-03 or 2024-03-01.',
+        before='Only contests before this date, as 2024, 2024-03 or 2024-03-01.',
+    )
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     @cf_common.user_guard(group='gitgud')
-    async def gimme(self, ctx, *args):
-        handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
-        rating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
-        tags = cf_common.parse_tags(args, prefix='+')
-        bantags = cf_common.parse_tags(args, prefix='~')
+    async def gimme(self, ctx,
+                    rating: Optional[filters.ProblemRating] = None,
+                    max_rating: Optional[filters.ProblemRating] = None,
+                    tags: str = '',
+                    exclude_tags: str = '',
+                    division: str = '',
+                    exclude_division: str = '',
+                    after: Optional[str] = None,
+                    before: Optional[str] = None):
+        """Recommend a problem you have not solved yet.
 
-        srating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
-        erating = srating 
-        dlo,dhi = cf_common.parse_daterange(args)
-        for arg in args:
-            if arg[0:3].isdigit():
-                ratings = arg.split("-")
-                srating = int(ratings[0])
-                if (len(ratings) > 1): 
-                    erating = int(ratings[1])
-                else:
-                    erating = srating
+        Without a rating you get one at your own rating, rounded to the nearest
+        100. Giving `max_rating` as well asks for a range instead, and hides the
+        problem rating behind a spoiler so the range does not give the
+        difficulty away.
+
+        Unlike /gitgud this earns no points and starts no challenge, so nothing
+        here costs anything.
+        """
+        handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
+        user_rating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
+
+        if max_rating is not None and rating is None:
+            raise CodeforcesCogError('Give `rating` as the lower bound when using `max_rating`.')
+        srating = user_rating if rating is None else rating
+        erating = srating if max_rating is None else max_rating
+        if erating < srating:
+            raise CodeforcesCogError(f'`max_rating` ({erating}) is below `rating` ({srating}).')
+
+        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        dlo, dhi = filters.date_range(after, before)
 
         submissions = await cf.user.status(handle=handle)
         solved = {sub.problem.name for sub in submissions if sub.verdict == 'OK'}
@@ -196,16 +243,42 @@ class Codeforces(commands.Cog):
             embed.add_field(name='Matched tags', value=tagslist)
         await ctx.send(f'Recommended problem for `{handle}`', embed=embed)
 
-    @commands.command(brief='List solved problems',
-                      usage='[handles] [+hardest] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
-    async def stalk(self, ctx, *args):
-        """Print problems solved by user sorted by time (default) or rating.
-        All submission types are included by default (practice, contest, etc.)
+    @commands.hybrid_command(brief='List solved problems')
+    @filters.describe('handles', *filters.SUB_FILTER_OPTIONS,
+                      sort='Most recently solved first (default), or hardest first.')
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               types=filters.submission_type_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def stalk(self, ctx, handles: str = '',
+                    sort: Literal['recent', 'hardest'] = 'recent',
+                    tags: str = '',
+                    exclude_tags: str = '',
+                    division: str = '',
+                    exclude_division: str = '',
+                    min_rating: Optional[filters.SubmissionRating] = None,
+                    max_rating: Optional[filters.SubmissionRating] = None,
+                    after: Optional[str] = None,
+                    before: Optional[str] = None,
+                    types: str = '',
+                    contests: str = '',
+                    indices: str = '',
+                    include_team: bool = False):
+        """Print problems solved by a user, most recent first.
+
+        Every submission type is included unless `types` says otherwise, so
+        practice counts the same as a contest. A problem solved more than once
+        is listed once, at its first accepted submission.
         """
-        (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
-        filt = cf_common.SubFilter(False)
-        args = filt.parse(args)
-        handles = args or ('!' + str(ctx.author),)
+        hardest = sort == 'hardest'
+        filt = filters.build_sub_filter(
+            rated=False, tags=tags, exclude_tags=exclude_tags, division=division,
+            exclude_division=exclude_division, min_rating=min_rating,
+            max_rating=max_rating, after=after, before=before, types=types,
+            contests=contests, indices=indices, include_team=include_team)
+
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         submissions = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for subs in submissions for sub in subs]
@@ -228,7 +301,6 @@ class Codeforces(commands.Cog):
             return '\N{EN SPACE}'.join(data)
 
         def make_page(chunk):
-            
             title = '{} solved problems by {}'.format('Hardest' if hardest else 'Recently',
                                                         ', '.join(handlesWithUrl))
             hist_str = '\n'.join(make_line(sub) for sub in chunk)
@@ -236,28 +308,32 @@ class Codeforces(commands.Cog):
             return title, embed
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(submissions[:100], 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Create a mashup', usage='[handles] [+tag..] [~tag..] [+divX] [~divX] [?[-]delta]')
-    async def mashup(self, ctx, *args):
-        """Create a mashup contest using problems within -200 and +400 of average rating of handles provided.
-        Add tags with "+" before them.
-        Ban tags with "~" before them.
+    @commands.hybrid_command(brief='Create a mashup')
+    @filters.describe('handles', 'tags', 'exclude_tags', 'division', 'exclude_division',
+                      delta='Shift the target rating by this much, rounded to 100.')
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
+    async def mashup(self, ctx, handles: str = '',
+                     tags: str = '',
+                     exclude_tags: str = '',
+                     division: str = '',
+                     exclude_division: str = '',
+                     delta: app_commands.Range[int, -1000, 1000] = 0):
+        """Create a mashup contest of four unsolved problems.
+
+        The problems sit within 300 of the average rating of the handles given,
+        which is itself taken 100 above their average before `delta` moves it.
         """
-        delta = 100
-        handles = [arg for arg in args if arg[0] not in '+~?']
-        tags = cf_common.parse_tags(args, prefix='+')
-        bantags = cf_common.parse_tags(args, prefix='~')
-        deltaStr = [arg[1:] for arg in args if arg[0] == '?' and len(arg) > 1]
-        if len(deltaStr) > 1:
-            raise CodeforcesCogError('Only one delta argument is allowed')
-        if len(deltaStr) == 1:
-            try:
-                delta += round(int(deltaStr[0]), -2)
-            except ValueError:
-                raise CodeforcesCogError('delta could not be interpreted as number')
+        # The 100 is the long standing default and is kept so that a mashup
+        # with no delta picks what it always did.
+        delta = 100 + round(delta, -2)
+        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
 
-        handles = handles or ('!' + str(ctx.author),)
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
         resp = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for user in resp for sub in user]
@@ -295,21 +371,43 @@ class Codeforces(commands.Cog):
         embed = discord_common.cf_color_embed(description=msg)
         await ctx.send(f'Mashup contest for `{str_handles}`', embed=embed)
 
-    @commands.command(brief='Challenge', aliases=['gitbad'],
-                      usage='[rating|rating1-rating2] [+tags] [~tags] [+divX] [~divX]')
+    @commands.hybrid_command(brief='Request a problem to solve for gitgud points',
+                             aliases=['gitbad'])
+    @app_commands.describe(
+        rating='Problem rating, 800-3500. Defaults to your own rating.',
+        max_rating='Upper bound of a rating range. The rating and points are then hidden.',
+        tags='Only problems with these tags, comma separated. Costs 200 points.',
+        exclude_tags='Never pick problems with these tags, comma separated.',
+        division='Only problems from these divisions, comma separated. Costs no points.',
+        exclude_division='Never pick problems from these divisions, comma separated.',
+    )
+    @app_commands.autocomplete(tags=filters.tag_autocomplete,
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     @cf_common.user_guard(group='gitgud')
-    async def gitgud(self, ctx, *args):
-        """Gitgud: Request a problem with a specific rating with ;gitgud <rating> or within a rating range with ;gitgud <rating1>-<rating2>
-        - Points are assigned by difference between problem rating and your current rating (rounded to nearest 100)
-        - Filter problems by division with [+divX] [~divX] possible values are div1, div2, div3, div4, edu
-        - Filter problems by tags with [+tags] [~tags]
-        - Claim gitgud points once problem is solved with ;gotgud
-        - If you can't solve the problem or used external help you should skip it with ;nogud (Available after 2 hours)
-        - All-time ranklist: ;gitgudders
-        - Monthly ranklist: ;monthlygitgudders
-        - Another way to gather gitgud points is ;upsolve (only works if there is no active gitgud-Challenge)
-        - Get more help with ;help <command> (e.g. ;help gitgudders)
-        
+    async def gitgud(self, ctx,
+                     rating: Optional[filters.ProblemRating] = None,
+                     max_rating: Optional[filters.ProblemRating] = None,
+                     tags: str = '',
+                     exclude_tags: str = '',
+                     division: str = '',
+                     exclude_division: str = ''):
+        """Request a problem to solve for gitgud points.
+
+        Points are assigned by the difference between the problem rating and
+        your own rating, rounded to the nearest 100. Asking for tags costs 200
+        points; asking for a division costs nothing.
+
+        Giving `max_rating` asks for a range instead of a single rating, and
+        hides the problem rating and the points behind a spoiler so the range
+        does not give away the difficulty.
+
+        - Claim your points once solved with /gotgud
+        - Skip a problem you cannot solve with /nogud (available after 2 hours)
+        - Ranklists: /gitgudders and /monthlygitgudders
+        - /upsolve is another way to gather points, when no challenge is active
+
         Point distribution:
         rating diff | <-300| -300 | -200 | -100 |   0  |  100 |  200 |>=300
         no tags     |   1  |   2  |   3  |   5  |   8  |  12  |  17  |  23 
@@ -320,38 +418,35 @@ class Codeforces(commands.Cog):
         user = cf_common.user_db.fetch_cf_user(handle)
         user_rating = round(user.effective_rating, -2)
         user_rating = max(800, user_rating)
-        user_rating = min(3500, user_rating)        
-        rating = user_rating
-        rating = max(1100, rating)
-        rating = min(3000, rating)
+        user_rating = min(3500, user_rating)
+        # Points are scored against the requester's own rating, never against
+        # the rating they asked for.
+        scoring_rating = min(3000, max(1100, user_rating))
+
+        if max_rating is not None and rating is None:
+            raise CodeforcesCogError('Give `rating` as the lower bound when using `max_rating`.')
+        srating = user_rating if rating is None else rating
+        erating = srating if max_rating is None else max_rating
+        if erating < srating:
+            raise CodeforcesCogError(f'`max_rating` ({erating}) is below `rating` ({srating}).')
+        # A range gives away less about the difficulty, so the rating and the
+        # points are spoilered when one is asked for.
+        hidden = max_rating is not None
+
         submissions = await cf.user.status(handle=handle)
         solved = {sub.problem.name for sub in submissions}
-        noguds = cf_common.user_db.get_noguds(ctx.message.author.id)
-        tags = cf_common.parse_tags(args, prefix='+')
-        bantags = cf_common.parse_tags(args, prefix='~')
-        srating = user_rating
-        erating = user_rating 
-        hidden = False
-        for arg in args:
-            if arg[0] == "-":
-                raise CodeforcesCogError('Wrong rating requested. Remember gitgud now uses rating (800-3500) instead of delta.')    
-            if arg[0:3].isdigit():
-                ratings = arg.split("-")
-                srating = int(ratings[0])
-                if (len(ratings) > 1): 
-                    erating = int(ratings[1])
-                    hidden = True
-                else:
-                    erating = srating
-        
-        if erating < 800 or srating > 3500:
-            raise CodeforcesCogError('Wrong rating requested. Remember gitgud now uses rating (800-3500) instead of delta.')
+        noguds = cf_common.user_db.get_noguds(ctx.author.id)
+
+        # Divisions never count towards the tag penalty, which is what the
+        # third value reports.
+        tags, bantags, scored_as_tagged = filters.problem_tags(
+            tags, exclude_tags, division, exclude_division, tags_cost_points=True)
 
         await self._validate_gitgud_status(ctx)
 
         problems = [prob for prob in cf_common.cache2.problem_cache.problems
                     if prob.rating >= srating and prob.rating <= erating
-                    and prob.name not in solved 
+                    and prob.name not in solved
                     and prob.name not in noguds
                     and prob.matches_all_tags(tags)
                     and not prob.matches_any_tag(bantags)]
@@ -370,16 +465,15 @@ class Codeforces(commands.Cog):
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
 
-        # remove division tags since we dont want them to reduce points
-        tags = [tag for tag in tags if tag not in cache_system2._DIV_TAGS]
-        bantags = [tag for tag in bantags if tag not in cache_system2._DIV_TAGS]
-
-        delta = problems[choice].rating - rating
-        if tags or bantags:
+        delta = problems[choice].rating - scoring_rating
+        # Divisions never reduce the score, only real tags do. That used to be
+        # done by filtering _DIV_TAGS back out of the tag lists here; the
+        # division is a separate parameter now, so it was never mixed in.
+        if scored_as_tagged:
             delta = delta - 200
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)
 
-    @commands.command(brief='Print user gitgud history')
+    @commands.hybrid_command(brief='Print user gitgud history')
     async def gitlog(self, ctx, member: discord.Member = None):
         """Displays the list of gitgud problems issued to the specified member, excluding those noguded by admins.
         If the challenge was completed, time of completion and amount of points gained will also be displayed.
@@ -412,9 +506,9 @@ class Codeforces(commands.Cog):
      
 
         pages = [make_page(chunk, score) for chunk in paginator.chunkify(data, 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Print user nogud history')
+    @commands.hybrid_command(brief='Print user nogud history')
     async def nogudlog(self, ctx, member: discord.Member = None):
         """Displays the list of nogud problems issued to the specified member, excluding those noguded by admins.
         """
@@ -442,9 +536,9 @@ class Codeforces(commands.Cog):
         data = [entry for entry in data if entry[1] is None]                
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(data, 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief='Report challenge completion', aliases=['gotbad'])
+    @commands.hybrid_command(brief='Report challenge completion', aliases=['gotbad'])
     @cf_common.user_guard(group='gitgud')
     async def gotgud(self, ctx):
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -478,7 +572,7 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send('You have already claimed your points')
 
-    @commands.command(brief='Skip challenge', aliases=['toobad'])
+    @commands.hybrid_command(brief='Skip challenge', aliases=['toobad'])
     @cf_common.user_guard(group='gitgud')
     async def nogud(self, ctx):
         await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -496,10 +590,11 @@ class Codeforces(commands.Cog):
         cf_common.user_db.skip_challenge(user_id, challenge_id, Gitgud.NOGUD)
         await ctx.send(f'Challenge skipped.')
 
-    @commands.command(brief='Force skip a challenge')
+    @commands.hybrid_command(name='forceskip', aliases=['_nogud'],
+                      brief="Force skip another user's challenge")
     @cf_common.user_guard(group='gitgud')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def _nogud(self, ctx, member: discord.Member):
+    async def forceskip(self, ctx, member: discord.Member):
         active = cf_common.user_db.check_challenge(member.id)
         if not active:
             await ctx.send(f'No active challenge found for user `{member.display_name}`.')
@@ -510,12 +605,27 @@ class Codeforces(commands.Cog):
         else:
             await ctx.send(f'Failed to force challenge skip.')
 
-    @commands.command(brief='Recommend a contest', usage='[handles...] [+pattern...]')
-    async def vc(self, ctx, *args: str):
-        """Recommends a contest based on Codeforces rating of the handle provided.
-        e.g ;vc mblazev c1729 +global +hello +goodbye +avito"""
-        markers = [x for x in args if x[0] == '+']
-        handles = [x for x in args if x[0] != '+'] or ('!' + str(ctx.author),)
+    @commands.hybrid_command(brief='Recommend a contest')
+    @app_commands.describe(
+        handles='Codeforces handles or Discord mentions, space separated. Defaults to you.',
+        patterns='Contest name patterns, comma separated. Picked from your rating if empty.',
+    )
+    @app_commands.autocomplete(patterns=_contest_pattern_autocomplete)
+    async def vc(self, ctx, handles: str = '', patterns: str = ''):
+        """Recommend a contest nobody in the list has submitted to.
+
+        A pattern matches anywhere in the contest name, ignoring case and
+        punctuation, so `div2` finds "(Div. 2)" and `goodbye` finds
+        "Good Bye 2023". The suggestions are the usual ones; anything you type
+        by hand counts too.
+
+        With no pattern the division follows the average rating: div3 below
+        1600, div2 below 2100, and the div1 grade series above that.
+        """
+        # A leading '+' was how the old single-field syntax told a pattern from
+        # a handle. It carries no meaning now, but is cheap to forgive.
+        markers = [pattern.lstrip('+') for pattern in filters.split_list(patterns)]
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=25)
         info = await cf.user.info(handles=handles)
         contests = cf_common.cache2.contest_cache.get_contests_in_phase('FINISHED')
@@ -553,14 +663,20 @@ class Codeforces(commands.Cog):
             return message, embed
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(contests, 5)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
-    @commands.command(brief="Display unsolved rounds closest to completion", usage='[keywords]')
-    async def fullsolve(self, ctx, *args: str):
-        """Displays a list of contests, sorted by number of unsolved problems.
-        Contest names matching any of the provided tags will be considered. e.g ;fullsolve +edu"""
+    @commands.hybrid_command(brief="Display unsolved rounds closest to completion")
+    @app_commands.describe(
+        patterns='Contest name patterns, comma separated. Every contest by default.')
+    @app_commands.autocomplete(patterns=_contest_pattern_autocomplete)
+    async def fullsolve(self, ctx, patterns: str = ''):
+        """List the contests you have partly solved, closest to completion first.
+
+        A pattern matches anywhere in the contest name, ignoring case and
+        punctuation, exactly as /vc does.
+        """
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
-        tags = [x for x in args if x[0] == '+']
+        tags = [pattern.lstrip('+') for pattern in filters.split_list(patterns)]
 
         problem_to_contests = cf_common.cache2.problemset_cache.problem_to_contests
         contests = [contest for contest in cf_common.cache2.contest_cache.get_contests_in_phase('FINISHED')
@@ -605,7 +721,7 @@ class Codeforces(commands.Cog):
             return message, embed
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(contest_unsolved_pairs, 10)]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, ctx=ctx)
 
     @staticmethod
     def getEloWinProbability(ra: float, rb: float) -> float:
@@ -626,19 +742,24 @@ class Codeforces(commands.Cog):
                 right = r
         return round((left + right) / 2)
 
-    @commands.command(brief='Calculate team rating', usage='[handles] [+peak]')
-    async def teamrate(self, ctx, *args: str):
-        """Provides the combined rating of the entire team.
-        If +server is provided as the only handle, will display the rating of the entire server.
-        Supports multipliers. e.g: ;teamrate gamegame*1000"""
+    @commands.hybrid_command(brief='Calculate team rating')
+    @filters.describe('handles',
+                      entire_server='Rate the whole server instead of the handles given.',
+                      peak='Use each handle\'s peak rating instead of its current one.')
+    async def teamrate(self, ctx, handles: str = '',
+                       entire_server: bool = False,
+                       peak: bool = False):
+        """Give the combined rating of a team.
 
-        (is_entire_server, peak), handles = cf_common.filter_flags(args, ['+server', '+peak'])
-        handles = handles or ('!' + str(ctx.author),)
+        A handle may carry a multiplier, as in `gamegame*1000`, to count that
+        person more than once.
+        """
+        handles = filters.split_words(handles) or ('!' + str(ctx.author),)
 
         def rating(user):
             return user.maxRating if peak else user.rating
 
-        if is_entire_server:
+        if entire_server:
             res = cf_common.user_db.get_cf_users_for_guild(ctx.guild.id)
             ratings = [(rating(user), 1) for user_id, user in res if user.rating is not None]
             user_str = '+server'
