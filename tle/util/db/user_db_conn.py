@@ -523,6 +523,15 @@ class UserDbConn:
         res = self.conn.execute(query, (guild_id,)).fetchall()
         return [(int(user_id), handle) for user_id, handle in res]
 
+    def get_all_handles_for_guild(self, guild_id):
+        """Like get_handles_for_guild, but includes members marked inactive,
+        with the active flag as a third element."""
+        query = ('SELECT user_id, handle, active '
+                 'FROM user_handle '
+                 'WHERE guild_id = ?')
+        res = self.conn.execute(query, (guild_id,)).fetchall()
+        return [(int(user_id), handle, bool(active)) for user_id, handle, active in res]
+
     def get_cf_users_for_guild(self, guild_id):
         query = ('SELECT u.user_id, c.handle, c.first_name, c.last_name, c.country, c.city, '
                  '    c.organization, c.contribution, c.rating, c.maxRating, c.last_online_time, '

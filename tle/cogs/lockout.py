@@ -144,7 +144,7 @@ class Round(commands.Cog):
             if cf_common.user_db.check_if_user_in_ongoing_round(ctx.guild.id, member.id):
                 busy_members.append(member)
         if busy_members:
-            busy_members_str = ", ".join([ctx.guild.get_member(int(member.id)).mention for member in busy_members])
+            busy_members_str = ", ".join(member.mention for member in busy_members)
             error = f'{busy_members_str} are registered in ongoing lockout rounds.'
             raise RoundCogError(error)
 
@@ -451,12 +451,12 @@ class Round(commands.Cog):
         updates, over, updated = await self._update_round(round)
 
         if updated or over:
-            await channel.send(f"{' '.join([(guild.get_member(int(m))).mention for m in round.users.split()])} there is an update in standings")
+            await channel.send(f"{' '.join(discord_common.mention(m) for m in round.users.split())} there is an update in standings")
 
         for i in range(len(updates)):
             if len(updates[i]):
                 await channel.send(embed=discord.Embed(
-                    description=f"{' '.join([(guild.get_member(m)).mention for m in updates[i]])} has solved problem worth **{round.points.split()[i]}** points",
+                    description=f"{' '.join(discord_common.mention(m) for m in updates[i])} has solved problem worth **{round.points.split()[i]}** points",
                     color=discord.Color.blue()))
 
         if not over and updated:
@@ -470,8 +470,8 @@ class Round(commands.Cog):
                                     list(map(int, round_info.status.split())),
                                     list(map(int, round_info.times.split())))
 
-            # change duel rating
-            eloChanges = self._calculateRatingChanges([[(guild.get_member(user.id)), user.rank, cf_common.user_db.get_duel_rating(user.id, guild.id)] for user in ranklist])
+            # change duel rating; only the ids matter, and a player may have left the server
+            eloChanges = self._calculateRatingChanges([[discord.Object(user.id), user.rank, cf_common.user_db.get_duel_rating(user.id, guild.id)] for user in ranklist])
             for id in list(map(int, round_info.users.split())):
                 cf_common.user_db.update_duel_rating(id, guild.id, eloChanges[id][1])
 

@@ -694,11 +694,12 @@ class Training(commands.Cog):
     async def fastest(self, ctx):
         """Show a list of fastest solves within a training session for each rating."""
         res = cf_common.user_db.train_get_fastest_solves()
-        
+        members = await discord_common.fetch_members(ctx.guild, [user_id for user_id, _, _ in res])
+
         rankings = []
         index = 0
         for user_id, rating, time in res:
-            member = ctx.guild.get_member(int(user_id))
+            member = members.get(int(user_id))
             handle = cf_common.user_db.get_handle(user_id, ctx.guild.id)
             user = cf_common.user_db.fetch_cf_user(handle)
             if user is None:

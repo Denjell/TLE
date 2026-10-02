@@ -128,6 +128,58 @@ async def bot_error_handler(ctx, exception):
         logger.exception(msg, exc_info=exc_info, extra=extra)
 
 
+# Discord caps a gateway member request at 100 user ids.
+_MEMBER_QUERY_LIMIT = 100
+
+
+async def fetch_members(guild, user_ids):
+    """Look up guild members by id, returning {user_id: Member}.
+
+    Without the Server Members intent the member cache is all but empty, so
+    guild.get_member() is not a membership test any more. Ids the cache does
+    not know are asked for over the gateway, which does not need the intent
+    when the ids are named. An id missing from the result is not in the guild.
+
+    The answers are deliberately not cached: without member join and leave
+    events nothing would ever evict a member who left.
+    """
+    members = {}
+    missing = []
+    for user_id in {int(user_id) for user_id in user_ids}:
+        member = guild.get_member(user_id)
+        if member is not None:
+            members[user_id] = member
+        else:
+            missing.append(user_id)
+    for i in range(0, len(missing), _MEMBER_QUERY_LIMIT):
+        chunk = missing[i: i + _MEMBER_QUERY_LIMIT]
+        for member in await guild.query_members(user_ids=chunk, limit=len(chunk), cache=False):
+            members[member.id] = member
+    return members
+
+
+async def fetch_member(guild, user_id):
+    """Look up one guild member by id, or None when they are not in the guild."""
+    return (await fetch_members(guild, [user_id])).get(int(user_id))
+
+
+async def fetch_member_or_user(bot, guild, user_id):
+    """The guild member, or the plain user when they have left the guild.
+
+    For records that outlive membership, such as a duel whose opponent left:
+    both have id, mention and display_name.
+    """
+    member = await fetch_member(guild, user_id)
+    if member is not None:
+        return member
+    return bot.get_user(int(user_id)) or await bot.fetch_user(int(user_id))
+
+
+def mention(user_id):
+    """Mention a user by id. Discord renders it client side, so no member data is needed."""
+    return f'<@{user_id}>'
+
+
 def once(func):
     """Decorator that wraps the given async function such that it is executed only once."""
     first = True
@@ -161,16 +213,31 @@ async def presence(bot):
         name='your commands'))
     await asyncio.sleep(60)
 
+    async def pick_target():
+        # bot.get_all_members() is near-empty without the Server Members
+        # intent, so draw from the members who linked a handle instead.
+        # Imported here: codeforces_common is initialised after this module.
+        from tle.util import codeforces_common as cf_common
+        try:
+            candidates = [(guild, user_id) for guild in bot.guilds
+                          for user_id, _ in cf_common.user_db.get_handles_for_guild(guild.id)]
+        except db.DatabaseDisabledError:
+            return None
+        random.shuffle(candidates)
+        for guild, user_id in candidates[:10]:
+            member = await fetch_member(guild, user_id)
+            if member is not None and 'Purgatory' not in {role.name for role in member.roles}:
+                return member
+        return None
+
     @tasks.task(name='OrzUpdate',
                waiter=tasks.Waiter.fixed_delay(5*60))
     async def presence_task(_):
         while True:
-            target = random.choice([
-                member for member in bot.get_all_members()
-                if 'Purgatory' not in {role.name for role in member.roles}
-            ])
-            await bot.change_presence(activity=discord.Game(
-                name=f'{target.display_name} orz'))
+            target = await pick_target()
+            if target is not None:
+                await bot.change_presence(activity=discord.Game(
+                    name=f'{target.display_name} orz'))
             await asyncio.sleep(10 * 60)
 
     presence_task.start()

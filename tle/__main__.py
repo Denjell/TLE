@@ -95,10 +95,10 @@ async def main():
     # are being migrated to slash commands, which need no message content.
     # See NoMessageContentIntent.md.
     #
-    # The Members intent is still privileged and still requested; removing it is
-    # a separate phase.
+    # The Members intent is not requested either, so the member cache is all but
+    # empty and member join/leave events never arrive. Members are looked up by
+    # id through discord_common.fetch_members instead. See NoServerMembersIntent.md.
     intents = discord.Intents.default()
-    intents.members = True
 
     bot = commands.Bot(command_prefix=commands.when_mentioned_or(discord_common._BOT_PREFIX), intents=intents)
     bot.help_command = discord_common.TleHelp()

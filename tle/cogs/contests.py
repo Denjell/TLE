@@ -583,7 +583,7 @@ class Contests(commands.Cog):
         this_vc_member_ids = {str(member.id) for member in members}
         intersection = this_vc_member_ids & ongoing_vc_member_ids
         if intersection:
-            busy_members = ", ".join([ctx.guild.get_member(int(member_id)).mention for member_id in intersection])
+            busy_members = ", ".join(discord_common.mention(member_id) for member_id in intersection)
             error = f'{busy_members} are registered in ongoing ratedvcs.'
             raise ContestCogError(error)
 
@@ -607,12 +607,12 @@ class Contests(commands.Cog):
         """Make an embed containing a list of rank changes and rating changes for ratedvc participants.
         """
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
+        # Mentions render client side, so the user id is all this needs; the
+        # active flag already leaves out anyone who left the server.
         user_id_handle_pairs = cf_common.user_db.get_handles_for_guild(guild.id)
-        member_handle_pairs = [(guild.get_member(int(user_id)), handle)
-                               for user_id, handle in user_id_handle_pairs]
-        member_change_pairs = [(member, change_by_handle[handle])
-                               for member, handle in member_handle_pairs
-                               if member is not None and handle in change_by_handle]
+        member_change_pairs = [(user_id, change_by_handle[handle])
+                               for user_id, handle in user_id_handle_pairs
+                               if handle in change_by_handle]
 
         member_change_pairs.sort(key=lambda pair: pair[1].newRating, reverse=True)
         rank_to_role = {role.name: role for role in guild.roles}
@@ -623,24 +623,24 @@ class Contests(commands.Cog):
             return role.mention if role else rank
 
         rank_changes_str = []
-        for member, change in member_change_pairs:
-            if len(cf_common.user_db.get_vc_rating_history(member.id)) == 1:
+        for user_id, change in member_change_pairs:
+            if len(cf_common.user_db.get_vc_rating_history(user_id)) == 1:
                 # If this is the user's first rated contest.
                 old_role = 'Unrated'
             else:
                 old_role = rating_to_displayable_rank(change.oldRating)
             new_role = rating_to_displayable_rank(change.newRating)
             if new_role != old_role:
-                rank_change_str = (f'{member.mention} [{discord.utils.escape_markdown(change.handle)}]({cf.PROFILE_BASE_URL}{change.handle}): {old_role} '
+                rank_change_str = (f'{discord_common.mention(user_id)} [{discord.utils.escape_markdown(change.handle)}]({cf.PROFILE_BASE_URL}{change.handle}): {old_role} '
                                    f'\N{LONG RIGHTWARDS ARROW} {new_role}')
                 rank_changes_str.append(rank_change_str)
 
         member_change_pairs.sort(key=lambda pair: pair[1].newRating - pair[1].oldRating,
                                  reverse=True)
         rating_changes_str = []
-        for member, change in member_change_pairs:
+        for user_id, change in member_change_pairs:
             delta = change.newRating - change.oldRating
-            rating_change_str = (f'{member.mention} [{discord.utils.escape_markdown(change.handle)}]({cf.PROFILE_BASE_URL}{change.handle}): {change.oldRating} '
+            rating_change_str = (f'{discord_common.mention(user_id)} [{discord.utils.escape_markdown(change.handle)}]({cf.PROFILE_BASE_URL}{change.handle}): {change.oldRating} '
                             f'\N{HORIZONTAL BAR} **{delta:+}** \N{LONG RIGHTWARDS ARROW} '
                             f'{change.newRating}')
             rating_changes_str.append(rating_change_str)
@@ -739,12 +739,16 @@ class Contests(commands.Cog):
 
     @commands.hybrid_command(brief='Show vc ratings')
     async def vcratings(self, ctx):
-        users = [(await self.member_converter.convert(ctx, str(member_id)), handle, cf_common.user_db.get_vc_rating(member_id, default_if_not_exist=False))
+        users = [(member_id, handle, cf_common.user_db.get_vc_rating(member_id, default_if_not_exist=False))
                  for member_id, handle in cf_common.user_db.get_handles_for_guild(ctx.guild.id)]
         # Filter only rated users. (Those who entered at least one rated vc.)
-        users = [(member, handle, rating)
-                 for member, handle, rating in users
+        users = [(member_id, handle, rating)
+                 for member_id, handle, rating in users
                  if rating is not None]
+        members = await discord_common.fetch_members(ctx.guild, [member_id for member_id, _, _ in users])
+        users = [(members[member_id], handle, rating)
+                 for member_id, handle, rating in users
+                 if member_id in members]
         users.sort(key=lambda user: -user[2])
 
         _PER_PAGE = 10
