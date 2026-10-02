@@ -194,27 +194,28 @@ def split_divisions(text, field):
 
 def problem_tags(tags, exclude_tags, division, exclude_division, *,
                  tags_cost_points=False):
-    """Split the tag and division fields.
+    """Split the tag and division fields and fold the divisions into tags/bantags.
 
-    Returns (tags, bantags, divisions, tagged). `divisions` has to be checked
-    separately, with Problem.matches_any_tag, rather than folded into `tags`
-    and ANDed the way a real tag is: a problem commonly carries more than one
-    division tag at once (a combined Div. 1 + Div. 2 round, say), so asking
-    for `div2, div3` has to mean "either", which ANDing into `tags` cannot
-    express. `exclude_division` has no such problem - excluding already means
-    "matches any of these" - so it folds into `bantags` same as any other
-    banned tag.
+    Divisions are matched exactly like real tags - the same
+    Problem.matches_all_tags AND that `tags` has always used - rather than
+    "matches any of these given". That mirrors the behaviour this field had
+    before it took labelled options at all: the old `+div2`/`~div2` prefix
+    syntax never distinguished a division from any other tag, so asking for
+    two was always an AND, same as asking for two real tags. In practice that
+    means `division: div2, div3` only matches a problem that is both at once
+    (a combined Div. 1 + Div. 2 round, say) - intentional, not a bug.
 
-    `tagged` reports whether a real tag was asked for, which is what gitgud
-    charges 200 points for; divisions never count towards it, which is why it
-    is read before exclude_division is folded in.
+    Returns (tags, bantags, tagged). `tagged` reports whether a real tag was
+    asked for, which is what gitgud charges 200 points for; divisions never
+    count towards it (same as on master), which is why it is read before
+    either division option is folded in.
     """
     tags = split_tags(tags, 'tags', tags_cost_points=tags_cost_points)
     bantags = split_tags(exclude_tags, 'exclude_tags', tags_cost_points=tags_cost_points)
     tagged = bool(tags or bantags)
+    tags += split_divisions(division, 'division')
     bantags += split_divisions(exclude_division, 'exclude_division')
-    divisions = split_divisions(division, 'division')
-    return tags, bantags, divisions, tagged
+    return tags, bantags, tagged
 
 
 def split_types(text):
@@ -280,8 +281,8 @@ def build_sub_filter(*, rated=True, tags='', exclude_tags='', division='',
     syntax back out of a message.
     """
     filt = cf_common.SubFilter(rated)
-    filt.tags, filt.bantags, filt.divisions, _ = problem_tags(
-        tags, exclude_tags, division, exclude_division)
+    filt.tags, filt.bantags, _ = problem_tags(tags, exclude_tags, division,
+                                              exclude_division)
     if min_rating is not None:
         filt.rlo = min_rating
     if max_rating is not None:

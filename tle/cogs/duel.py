@@ -258,7 +258,7 @@ class Dueling(commands.Cog):
             raise DuelCogError(
                 f'{opponent.mention} is currently in a duel!')
                 
-        tags, bantags, divisions, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
         dlo, dhi = filters.date_range(after, before)
         users = [cf_common.user_db.fetch_cf_user(handle) for handle in handles]
         lowest_rating = min(user.effective_rating or 0 for user in users)
@@ -283,7 +283,6 @@ class Dueling(commands.Cog):
                     and not cf_common.is_nonstandard_problem(prob)
                     and prob.matches_all_tags(tags)
                     and not prob.matches_any_tag(bantags)
-                    and (not divisions or prob.matches_any_tag(divisions))
                     and dlo <= cf_common.cache2.contest_cache.get_contest(prob.contestId).startTimeSeconds < dhi]
 
         for problems in map(get_problems, range(rating, 400, -100)):

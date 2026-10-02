@@ -211,7 +211,7 @@ class Codeforces(commands.Cog):
         if erating < srating:
             raise CodeforcesCogError(f'`max_rating` ({erating}) is below `rating` ({srating}).')
 
-        tags, bantags, divisions, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
         dlo, dhi = filters.date_range(after, before)
 
         submissions = await cf.user.status(handle=handle)
@@ -222,7 +222,6 @@ class Codeforces(commands.Cog):
                     and not cf_common.is_contest_writer(prob.contestId, handle)
                     and prob.matches_all_tags(tags)
                     and not prob.matches_any_tag(bantags)
-                    and (not divisions or prob.matches_any_tag(divisions))
                     and dlo <= cf_common.cache2.contest_cache.get_contest(prob.contestId).startTimeSeconds < dhi]
 
         if not problems:
@@ -332,7 +331,7 @@ class Codeforces(commands.Cog):
         # The 100 is the long standing default and is kept so that a mashup
         # with no delta picks what it always did.
         delta = 100 + round(delta, -2)
-        tags, bantags, divisions, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
+        tags, bantags, _ = filters.problem_tags(tags, exclude_tags, division, exclude_division)
 
         handles = filters.split_words(handles) or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
@@ -349,8 +348,7 @@ class Codeforces(commands.Cog):
                     and not any(cf_common.is_contest_writer(prob.contestId, handle) for handle in handles)
                     and not cf_common.is_nonstandard_problem(prob)
                     and prob.matches_all_tags(tags)
-                    and not prob.matches_any_tag(bantags)
-                    and (not divisions or prob.matches_any_tag(divisions))]
+                    and not prob.matches_any_tag(bantags)]
 
         if len(problems) < 4:
             raise CodeforcesCogError('Problems not found within the search parameters')
@@ -440,8 +438,8 @@ class Codeforces(commands.Cog):
         noguds = cf_common.user_db.get_noguds(ctx.author.id)
 
         # Divisions never count towards the tag penalty, which is what the
-        # fourth value reports.
-        tags, bantags, divisions, scored_as_tagged = filters.problem_tags(
+        # third value reports.
+        tags, bantags, scored_as_tagged = filters.problem_tags(
             tags, exclude_tags, division, exclude_division, tags_cost_points=True)
 
         await self._validate_gitgud_status(ctx)
@@ -451,8 +449,7 @@ class Codeforces(commands.Cog):
                     and prob.name not in solved
                     and prob.name not in noguds
                     and prob.matches_all_tags(tags)
-                    and not prob.matches_any_tag(bantags)
-                    and (not divisions or prob.matches_any_tag(divisions))]
+                    and not prob.matches_any_tag(bantags)]
                         
 
         def check(problem):
