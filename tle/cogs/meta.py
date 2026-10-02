@@ -56,7 +56,16 @@ class Meta(commands.Cog):
     @app_commands.autocomplete(command=discord_common.command_autocomplete)
     async def help(self, ctx, *, command: Optional[str] = None):
         """Show help for TLE, or for one specific command."""
-        await ctx.send_help(command)
+        # Context.send_help is variadic (*args), not a single Optional
+        # parameter: send_help(None) passes a 1-tuple (None,), which takes
+        # the "specific entity" branch, finds entity is None, and silently
+        # returns without sending anything -- leaving a deferred interaction
+        # hanging forever. send_help() with zero args is what actually shows
+        # the full bot help listing.
+        if command:
+            await ctx.send_help(command)
+        else:
+            await ctx.send_help()
 
     @commands.hybrid_group(brief='Bot control', invoke_without_command=True)
     async def meta(self, ctx):
