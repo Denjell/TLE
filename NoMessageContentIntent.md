@@ -11,10 +11,17 @@ This plan is written against the code on `master`.
 > **Status (2026-09-29): phase 1 is functionally complete and has been running
 > live since.** All 11 cogs are converted; every command that used to read a
 > free-text `args` field now has labelled slash options. The one deliberate
-> exception is `starboard`, left degraded on purpose (§6.7) — everything else
+> exception was `starboard`, left degraded on purpose (§6.7) — everything else
 > in this document is done. See [§9. Final status](#9-final-status) for the
 > full account of what shipped, what was found along the way, and what is
 > still open.
+>
+> **Update (2026-10-02):** `starboard` is no longer loaded at all. The §6.7
+> open decision ("link-only entries, or remove the cog?") was resolved as
+> neither fix nor removal: `tle/cogs/starboard.py` moved to
+> `tle/cogs/deactivated/`, the same way `cses.py` was turned off — out of the
+> non-recursive cog glob, code and starboard DB data both kept, reversible by
+> moving the file back. See §6.7 and §8 item 1.
 
 ---
 
@@ -418,6 +425,14 @@ every message is rejected and the failure is logged at info level, so from a
 user's side the starboard simply stops working with no explanation. If this
 stays unresolved for long, consider at least making the failure visible.
 
+**Resolved (2026-10-02): deactivated, not fixed.** The A+ redesign below is
+still the recommended fix if starboard comes back, but nobody had verified its
+one unverified assumption (content in a context-menu interaction's resolved
+payload), so rather than ship an unverified design or leave it silently
+broken indefinitely, the cog was moved to `tle/cogs/deactivated/` instead —
+honest (`;starboard` now does nothing rather than quietly rejecting
+everything) and fully reversible.
+
 **There is a way to keep full content**, found after this document was first
 written: **message context menu commands**. A right-click -> Apps -> "Star this
 message" command receives the target message inside the interaction payload
@@ -569,8 +584,9 @@ command tree" errors without connecting to Discord.
 
 These block specific stages and need an answer before that stage starts:
 
-1. **Starboard** (§6.7) — link-only entries, or remove the cog? **Still open.**
-   Deliberately left undone; the cog is quietly broken in the meantime (§6.7).
+1. **Starboard** (§6.7) — link-only entries, or remove the cog? **Resolved
+   (2026-10-02): deactivated.** Moved to `tle/cogs/deactivated/` rather than
+   fixed or deleted outright — see §6.7.
 2. **`ratedvc` / `remind here`** (§6.3) — string parameter, or leave prefix-only?
    **Resolved: string parameter.** Both take `members: str`, split and resolved
    through `_resolve_members`/`resolve_handles` — the same pattern as `vc` and
@@ -610,10 +626,12 @@ one-stop summary; everything in it is expanded elsewhere in this document.
 - **The privileged intent is gone.** [`tle/__main__.py`](tle/__main__.py) no
   longer requests `message_content`; only `intents.members` remains (Server
   Members is out of scope here, see below).
-- **All 11 cogs converted to hybrid commands** — `meta`, `cache_control`,
+- **10 of 11 cogs converted to hybrid commands** — `meta`, `cache_control`,
   `contests`, `duel`, `handles`, `graphs`, `training`, `codeforces`, `lockout`,
   `logging` (no commands to convert), plus the help command itself
-  (`TleHelp`). The one exception is `starboard`, deferred on purpose (§6.7).
+  (`TleHelp`). The one exception, `starboard`, was deferred on purpose (§6.7)
+  and later deactivated rather than converted — see "Deliberately not done"
+  below.
 - **Sync and interaction plumbing** (`__main__.py`): `bot.tree.sync()` on
   startup, a global `before_invoke` hook that defers every interaction once
   instead of 118 times, and stale-global-command cleanup when syncing to a
@@ -669,13 +687,16 @@ meant actually reading what its old parsing did:
 
 ### Deliberately not done
 
-- **`starboard`** (§6.7). Quietly broken as of this branch: the reaction
-  trigger still fires, then every message is rejected because `content` and
+- **`starboard`** (§6.7). Was quietly broken as of this branch: the reaction
+  trigger still fired, then every message was rejected because `content` and
   `attachments` are always empty without the intent, logged at info level with
   no user-visible error. A fix is designed (context-menu "Star this message"
   + reactions for the threshold, §6.7's option A+) but unverified — it rests
   on an untested assumption about what Discord puts in a context-menu
-  interaction's resolved-message payload for an app without the intent.
+  interaction's resolved-message payload for an app without the intent. As of
+  2026-10-02 the cog is deactivated (`tle/cogs/deactivated/starboard.py`)
+  rather than carrying that unverified fix or staying silently broken; the A+
+  design is still there if someone verifies the assumption and reactivates it.
 - **Production cutover** (§6.6a). This branch has only ever synced to one
   dev guild. Going to a real, multi-guild deployment means a guild→global
   sync switch, and cleaning up the registrations the five September renames
