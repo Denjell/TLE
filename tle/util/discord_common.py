@@ -248,11 +248,19 @@ class TleHelp(commands.DefaultHelpCommand):
 
 
 async def command_autocomplete(interaction, current: str):
-    """Suggest top-level and subcommand names for /help, e.g. 'duel challenge'."""
+    """Suggest top-level and subcommand names for /help, e.g. 'duel challenge'.
+
+    Discord allows at most 25 suggestions, well under the ~115 commands and
+    subcommands TLE has, so an unfiltered list can't show everything anyway.
+    With nothing typed yet, show just the top-level commands (no space in the
+    name) as an overview of what's available; once the user starts typing,
+    search across subcommands too so 'chal' still finds 'duel challenge'.
+    """
     current = current.lower()
-    names = sorted({
-        command.qualified_name
-        for command in interaction.client.walk_commands()
-        if not command.hidden and current in command.qualified_name.lower()
-    })
+    all_names = {command.qualified_name for command in interaction.client.walk_commands()
+                 if not command.hidden}
+    if current:
+        names = sorted(name for name in all_names if current in name.lower())
+    else:
+        names = sorted(name for name in all_names if ' ' not in name)
     return [app_commands.Choice(name=name, value=name) for name in names[:25]]
