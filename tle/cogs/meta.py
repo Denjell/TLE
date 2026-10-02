@@ -3,10 +3,13 @@ import subprocess
 import sys
 import time
 import textwrap
+from typing import Optional
 
+from discord import app_commands
 from discord.ext import commands
 
 from tle import constants
+from tle.util import discord_common
 from tle.util.codeforces_common import pretty_time_format
 
 RESTART = 42
@@ -47,6 +50,13 @@ class Meta(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.start_time = time.time()
+
+    @commands.hybrid_command(brief='Show help for TLE or one command')
+    @app_commands.describe(command='Command name, e.g. "gitgud" or "duel challenge". Leave empty to list everything.')
+    @app_commands.autocomplete(command=discord_common.command_autocomplete)
+    async def help(self, ctx, *, command: Optional[str] = None):
+        """Show help for TLE, or for one specific command."""
+        await ctx.send_help(command)
 
     @commands.hybrid_group(brief='Bot control', invoke_without_command=True)
     async def meta(self, ctx):
