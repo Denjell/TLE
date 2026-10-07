@@ -67,6 +67,18 @@ class CacheControl(commands.Cog):
             count = await cf_common.cache2.rating_changes_cache.fetch_contest(contest_id)
         await ctx.send(f'Done, fetched {count} changes and recached handle ratings')
 
+    @cache.command(brief='Fast cache of every rated user\'s current rating')
+    @commands.has_role(constants.TLE_ADMIN)
+    @timed_command
+    async def fastratings(self, ctx):
+        """Fetches the current rating of every rated user in one request (user.ratedList).
+        Takes seconds instead of the hour `ratingchanges all` takes, but has no rating
+        history, so it is only accurate for ;probrat on contests that are not rated yet.
+        """
+        await ctx.send('Fetching current ratings of all rated users...')
+        count = await cf_common.cache2.rating_changes_cache.fetch_current_ratings()
+        await ctx.send(f'Done, cached current ratings of {count} users')
+
     @cache.command(usage='contest_id|all')
     @commands.has_role(constants.TLE_ADMIN)
     @timed_command

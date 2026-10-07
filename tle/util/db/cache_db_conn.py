@@ -58,6 +58,17 @@ class CacheDbConn:
         self.conn.execute('CREATE INDEX IF NOT EXISTS ix_rating_change_rating_update_time '
                           'ON rating_change (handle ASC, rating_update_time DESC)')
 
+        # Table for the fast rating cache: every rated user's current rating, fetched in
+        # one go from the user.ratedList endpoint (no history, unlike rating_change).
+        self.conn.execute(
+            'CREATE TABLE IF NOT EXISTS current_rating ('
+            'handle      TEXT NOT NULL,'
+            'rating      INTEGER,'
+            'fetch_time  INTEGER,'
+            'PRIMARY KEY (handle)'
+            ')'
+        )
+
         # Table for problems fetched from contest.standings endpoint for every contest.
         # This is separate from table problem as it contains the same problem twice if it
         # appeared in both Div 1 and Div 2 of some round.
@@ -128,6 +139,20 @@ class CacheDbConn:
         rc = self.conn.executemany(query, change_tuples).rowcount
         self.conn.commit()
         return rc
+
+    def save_current_ratings(self, users, fetch_time):
+        """Replaces the fast rating cache with the given users' current ratings."""
+        self.conn.execute('DELETE FROM current_rating')
+        query = 'INSERT OR REPLACE INTO current_rating (handle, rating, fetch_time) VALUES (?, ?, ?)'
+        rc = self.conn.executemany(
+            query, [(user.handle, user.rating, fetch_time) for user in users
+                    if user.rating is not None]).rowcount
+        self.conn.commit()
+        return rc
+
+    def get_current_ratings(self):
+        query = 'SELECT handle, rating, fetch_time FROM current_rating'
+        return self.conn.execute(query).fetchall()
 
     def clear_rating_changes(self, contest_id=None):
         if contest_id is None:
