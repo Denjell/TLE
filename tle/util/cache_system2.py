@@ -523,9 +523,24 @@ class RatingChangesCache:
         return self.handle_rating_cache.get(handle,
                                             cf.DEFAULT_RATING if default_if_absent else None)
 
+    async def fetch_current_ratings(self):
+        """Fast cache: fetches the current rating of every rated user with a single
+        user.ratedList request and saves it. Intended for manual trigger."""
+        users = await cf.user.ratedList(activeOnly=False)
+        return self.cache_master.conn.save_current_ratings(users, int(time.time()))
+
     async def get_all_ratings_before_timestamp(self, timestamp):
         res = self.cache_master.conn.get_all_ratings_before_timestamp(timestamp)
-        return {ratingchange.handle: ratingchange for ratingchange in res}
+        ratings = {ratingchange.handle: ratingchange for ratingchange in res}
+        # Ratings from the fast cache are used when they are newer than what the slow
+        # cache (rating changes) has. They are only right for contests that are not
+        # rated yet, which is the only case ;probrat asks this for.
+        for handle, rating, fetch_time in self.cache_master.conn.get_current_ratings():
+            known = ratings.get(handle)
+            if known is None or (known.ratingUpdateTimeSeconds or 0) < fetch_time:
+                ratings[handle] = cf.RatingChange(
+                    None, 'fast cache', handle, None, fetch_time, rating, rating)
+        return ratings
 
     def get_all_ratings(self):
         return list(self.handle_rating_cache.values())
