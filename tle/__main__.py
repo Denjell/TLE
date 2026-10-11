@@ -102,6 +102,11 @@ async def main():
 
     bot = commands.Bot(command_prefix=commands.when_mentioned_or(discord_common._BOT_PREFIX), intents=intents)
     bot.help_command = discord_common.TleHelp()
+    # HelpCommand._add_to_bot auto-registers a prefix-only Command named
+    # 'help'; remove it so the Meta cog's hybrid 'help' command (slash and
+    # prefix both) can take the name instead. This doesn't touch
+    # bot._help_command, so ctx.send_help(...) keeps working everywhere.
+    bot.remove_command('help')
     cogs = [file.stem for file in Path('tle', 'cogs').glob('*.py')]
     for extension in cogs:
         await bot.load_extension(f'tle.cogs.{extension}')

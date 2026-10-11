@@ -109,14 +109,30 @@ them as removal candidates rather than a pattern to extend.
 
 Any command that takes Codeforces tags, a division, a rating range, a date
 range, submission types, or a `SubFilter` should build its options from here
-rather than re-declaring them: `Division`/`ProblemRating`/`SubmissionRating`
-types, `describe()` for the standard option descriptions, `tag_autocomplete`/
-`submission_type_autocomplete`, `split_tags`/`problem_tags`/`split_types`,
-`parse_date`/`date_range`, and `build_sub_filter()`. Division tags (`div1`…
-`edu`) are deliberately kept out of the free-text `tags` option — TLE writes
-them into `Problem.tags` itself when caching problemsets, so a plain tag
-filter would silently accept them, and for `/gitgud` specifically a tag costs
-200 points while the dedicated `division` option costs nothing.
+rather than re-declaring them: `ProblemRating`/`SubmissionRating` types,
+`describe()` for the standard option descriptions, `tag_autocomplete`/
+`division_autocomplete`/`submission_type_autocomplete`,
+`split_tags`/`split_divisions`/`problem_tags`/`split_types`,
+`parse_date`/`date_range`, and `build_sub_filter()`.
+
+`division`/`exclude_division` are comma separated, multi-select fields, the
+same interface `tags` has — `division_autocomplete` suggests the five
+division tags (`div1`…`edu`) and preserves what's already typed. They are
+kept apart from the free-text `tags` option for scoring purposes only: TLE
+writes division tags onto `Problem.tags` itself when caching problemsets, and
+for `/gitgud` specifically a real tag costs 200 points while `division` costs
+nothing, so a plain tag filter accepting them silently would be a loophole.
+Matching itself is not special-cased, though: `problem_tags()` folds
+`division` straight into `tags` and `exclude_division` into `bantags`, so
+both are matched exactly like real tags always have been —
+`Problem.matches_all_tags` (AND) for `tags`, `matches_any_tag` (OR, i.e.
+"banned if it has any of these") for `bantags`. Multi-select `division`
+therefore means AND, same as `master` always did when `+div2 +div3` were two
+ordinary tags: `division: div2, div3` only matches a problem that is both at
+once (a combined Div. 1 + Div. 2 round), which is deliberate, confirmed by
+user feedback, not a bug — a from-scratch design would plausibly want OR
+here (and an earlier version of this branch had it), but matching master's
+long-standing behavior won out.
 
 ### Caching (`tle/util/cache_system2.py`, `tle/util/db/cache_db_conn.py`)
 

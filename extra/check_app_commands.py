@@ -142,6 +142,11 @@ async def build_tree(cog_names):
     intents = discord.Intents.default()
     intents.members = True
     bot = commands.Bot(command_prefix=';', intents=intents)
+    # Bot.__init__ auto-assigns a DefaultHelpCommand, which registers its own
+    # prefix-only 'help' Command. That collides with the Meta cog's own
+    # hybrid 'help' command, the same way it would in __main__.py without the
+    # bot.remove_command('help') there -- so disable it here too.
+    bot.help_command = None
     failures = []
     for extension in cog_names:
         try:

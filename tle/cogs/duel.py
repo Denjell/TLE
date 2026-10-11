@@ -211,13 +211,15 @@ class Dueling(commands.Cog):
         before='Only problems from contests before this date, as 2024 or 2024-03-01.',
         nohandicap='Give the higher rated duelist no extra time handicap.')
     @app_commands.autocomplete(tags=filters.tag_autocomplete,
-                               exclude_tags=filters.tag_autocomplete)
+                               exclude_tags=filters.tag_autocomplete,
+                               division=filters.division_autocomplete,
+                               exclude_division=filters.division_autocomplete)
     async def challenge(self, ctx, opponent: discord.Member,
                         rating: Optional[filters.ProblemRating] = None,
                         tags: str = '',
                         exclude_tags: str = '',
-                        division: Optional[filters.Division] = None,
-                        exclude_division: Optional[filters.Division] = None,
+                        division: str = '',
+                        exclude_division: str = '',
                         after: Optional[str] = None,
                         before: Optional[str] = None,
                         nohandicap: bool = False):
