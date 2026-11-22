@@ -53,6 +53,8 @@ def check_command(command, problems, depth=0, path=''):
     if len(command.name) > MAX_NAME_LENGTH:
         problems.append(f'/{qualified}: name is {len(command.name)} chars, '
                         f'limit is {MAX_NAME_LENGTH}')
+    if isinstance(command, app_commands.ContextMenu):
+        return 1
 
     if isinstance(command, app_commands.Group):
         check_description(f'/{qualified}', command.description, problems)
