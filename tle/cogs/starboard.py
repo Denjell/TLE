@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from tle import constants
@@ -22,6 +23,54 @@ class Starboard(commands.Cog):
         self.bot = bot
         self.locks = {}
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.ctx_menu = app_commands.ContextMenu(
+            name='Add to Starboard',
+            callback=self.starboard_context_menu,
+        )
+        self.bot.tree.add_command(self.ctx_menu)
+
+    async def cog_unload(self):
+        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
+
+    @app_commands.guild_only()
+    async def starboard_context_menu(self, interaction: discord.Interaction,
+                                     message: discord.Message):
+        await interaction.response.defer(ephemeral=True)
+        res = cf_common.user_db.get_starboard(interaction.guild_id)
+        if res is None:
+            await interaction.followup.send(
+                embed=discord_common.embed_alert('Starboard is not set up in this server.'),
+                ephemeral=True,
+            )
+            return
+
+        starboard_channel_id = int(res[0])
+        try:
+            fetched = await message.channel.fetch_message(message.id)
+            added = await self.check_and_add_to_starboard(
+                starboard_channel_id, message, interaction.user.id,
+                reactions=fetched.reactions,
+            )
+        except StarboardCogError as e:
+            await interaction.followup.send(
+                embed=discord_common.embed_alert(str(e)),
+                ephemeral=True,
+            )
+            return
+
+        if added:
+            await interaction.followup.send(
+                embed=discord_common.embed_success('Added message to starboard!'),
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                embed=discord_common.embed_alert(
+                    f'Message needs at least {_STAR_THRESHOLD} {_STAR} reactions '
+                    'or is already on the starboard.'
+                ),
+                ephemeral=True,
+            )
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
@@ -31,8 +80,14 @@ class Starboard(commands.Cog):
         if res is None:
             return
         starboard_channel_id = int(res[0])
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            return
         try:
-            await self.check_and_add_to_starboard(starboard_channel_id, payload)
+            message = await channel.fetch_message(payload.message_id)
+            await self.check_and_add_to_starboard(
+                starboard_channel_id, message, payload.user_id,
+            )
         except StarboardCogError as e:
             self.logger.info(f'Failed to starboard: {e!r}')
 
@@ -74,36 +129,37 @@ class Starboard(commands.Cog):
         embed.set_footer(text=str(message.author), icon_url=message.author.avatar)
         return embed
 
-    async def check_and_add_to_starboard(self, starboard_channel_id, payload):
-        guild = self.bot.get_guild(payload.guild_id)
+    async def check_and_add_to_starboard(self, starboard_channel_id, message,
+                                         user_id, reactions=None):
+        guild = message.guild
         starboard_channel = guild.get_channel(starboard_channel_id)
         if starboard_channel is None:
             raise StarboardCogError('Starboard channel not found')
 
-        channel = self.bot.get_channel(payload.channel_id)
-        message = await channel.fetch_message(payload.message_id)
         if ((message.type != discord.MessageType.default and message.type != discord.MessageType.reply)
             or (len(message.content) == 0 and len(message.attachments) == 0)):
             raise StarboardCogError('Cannot starboard this message')
 
-        reaction_count = sum(reaction.count for reaction in message.reactions
+        reactions = message.reactions if reactions is None else reactions
+        reaction_count = sum(reaction.count for reaction in reactions
                              if str(reaction) == _STAR)
         if reaction_count < _STAR_THRESHOLD:
-            return
-        lock = self.locks.get(payload.guild_id)
+            return False
+        lock = self.locks.get(guild.id)
         if lock is None:
-            self.locks[payload.guild_id] = lock = asyncio.Lock()
+            self.locks[guild.id] = lock = asyncio.Lock()
 
         async with lock:
             if cf_common.user_db.check_exists_starboard_message(message.id):
-                return
+                return False
             embed = self.prepare_embed(message)
             starboard_message = await starboard_channel.send(embed=embed)
             cf_common.user_db.add_starboard_message(message.id, starboard_message.id, guild.id)
-            self.logger.info(f'Added message {message.id} to starboard (Last reaction by {payload.user_id})')
+            self.logger.info(f'Added message {message.id} to starboard (Triggered by {user_id})')
+            return True
 
-    @commands.group(brief='Starboard commands',
-                    invoke_without_command=True)
+    @commands.hybrid_group(brief='Starboard commands',
+                           invoke_without_command=True)
     async def starboard(self, ctx):
         """Group for commands involving the starboard."""
         await ctx.send_help(ctx.command)
@@ -130,9 +186,13 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Remove a message from starboard')
     @commands.has_role(constants.TLE_ADMIN)
-    async def remove(self, ctx, original_message_id: int):
+    async def remove(self, ctx, original_message_id: str):
         """Remove a particular message from the starboard database."""
-        rc = cf_common.user_db.remove_starboard_message(original_msg_id=original_message_id)
+        try:
+            msg_id = int(original_message_id)
+        except ValueError:
+            raise StarboardCogError('Invalid message ID.')
+        rc = cf_common.user_db.remove_starboard_message(original_msg_id=msg_id)
         if rc:
             await ctx.send(embed=discord_common.embed_success('Successfully removed'))
         else:
